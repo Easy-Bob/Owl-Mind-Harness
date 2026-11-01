@@ -1,7 +1,7 @@
 """Project rules, checked on the syntax tree so that comments and prose do not trip them."""
 
 import ast
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -159,6 +159,24 @@ def check_ascii_source(root: Path) -> list[Violation]:
                 found.append(Violation("ascii-source", relative, number, "non-ASCII byte"))
                 break
     return found
+
+
+def check_every_call_recorded(model_calls: int, recorded: int) -> list[Violation]:
+    """Every model call in a test run produces exactly one telemetry record."""
+    if model_calls == recorded:
+        return []
+    message = f"{model_calls} model calls but {recorded} records"
+    return [Violation("every-call-recorded", "<test run>", 0, message)]
+
+
+def check_telemetry_failure_is_isolated(model_call: Callable[[], object]) -> list[Violation]:
+    """Run a model call while telemetry is failing. The call itself must still succeed."""
+    try:
+        model_call()
+    except Exception as exc:
+        message = f"call failed with {type(exc).__name__}"
+        return [Violation("telemetry-isolated", "<test run>", 0, message)]
+    return []
 
 
 ALL_CHECKS = (

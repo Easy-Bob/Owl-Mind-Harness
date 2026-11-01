@@ -18,11 +18,11 @@ The default test run blocks network access and costs nothing. Settings are liste
 
 ### Local services
 
-Postgres and Redis run in Docker, on ports 5433 and 6380 to avoid clashing with other local projects:
+Postgres, Redis, Prometheus and Grafana run in Docker, on ports 5433, 6380, 9091 and 3002 to avoid clashing with other local projects:
 
 ```bash
 cp .env.example .env
-docker compose up -d --wait postgres redis
+docker compose up -d --wait
 uv run alembic upgrade head
 uv run pytest -m integration
 ```
@@ -30,6 +30,17 @@ uv run pytest -m integration
 The integration tests flush Redis and restart the containers, and they refuse to run against any other address. Don't point them at data you want to keep.
 
 `docker compose down -v` deletes all local data. Use `docker compose down` to keep it.
+
+### Telemetry
+
+Every model call is recorded in `ops.model_calls`, with metadata only and no message text. To run the parts that are not in Docker:
+
+```bash
+uv run python -m owl_mind.worker.telemetry
+uv run uvicorn owl_mind.api.app:app --host 0.0.0.0 --port 8010
+```
+
+The first is the consumer that writes the rows. The second serves `/metrics`, which Prometheus scrapes. Port 8010 is open to your network while it runs. Grafana is at http://localhost:3002 (user `admin`, password `owl_dev`).
 
 ### Live model test
 

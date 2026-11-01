@@ -2,8 +2,6 @@
 
 import json
 
-import httpx
-import openai
 import pytest
 from deepagents import create_deep_agent
 from langchain_core.messages import HumanMessage, ToolMessage
@@ -11,15 +9,7 @@ from langchain_core.tools import tool
 
 from owl_mind.core.config import ConfigError, get_settings
 from owl_mind.core.model import ModelTier, get_chat_model
-
-USAGE = {
-    "prompt_tokens": 10,
-    "completion_tokens": 5,
-    "total_tokens": 15,
-    "prompt_cache_hit_tokens": 0,
-    "prompt_cache_miss_tokens": 10,
-    "completion_tokens_details": {"reasoning_tokens": 0},
-}
+from tests.fake_deepseek import USAGE, FakeDeepSeek, tool_call
 
 
 @pytest.fixture(autouse=True)
@@ -33,48 +23,6 @@ def settings(monkeypatch, tmp_path):
     get_settings.cache_clear()
 
 
-def completion(message: dict) -> dict:
-    return {
-        "id": "test",
-        "object": "chat.completion",
-        "created": 0,
-        "model": "deepseek-flash",
-        "choices": [{"index": 0, "finish_reason": "stop", "message": message}],
-        "usage": USAGE,
-    }
-
-
-def tool_call(call_id: str, code_name: str) -> dict:
-    return {
-        "id": call_id,
-        "type": "function",
-        "function": {"name": "lookup_code", "arguments": json.dumps({"name": code_name})},
-    }
-
-
-class FakeDeepSeek:
-    """Replays set replies and records every request body the client would send."""
-
-    def __init__(self, replies: list[dict], usage: dict = USAGE) -> None:
-        self.replies = list(replies)
-        self.usage = usage
-        self.requests: list[dict] = []
-
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(json.loads(request.content))
-        body = dict(completion(self.replies.pop(0)), usage=self.usage)
-        return httpx.Response(200, json=body)
-
-    def attach(self, model) -> None:
-        client = openai.OpenAI(
-            api_key="not-a-real-key",
-            base_url="https://api.deepseek.com",
-            http_client=httpx.Client(transport=httpx.MockTransport(self)),
-        )
-        model.root_client = client
-        model.client = client.chat.completions
-
-
 @tool
 def lookup_code(name: str) -> str:
     """Return the code for a name."""
@@ -82,19 +30,19 @@ def lookup_code(name: str) -> str:
 
 
 def test_tiers_map_to_deepseek_model_ids():
-    assert get_chat_model(ModelTier.SMALL).model_name == "deepseek-flash"
+    assert get_chat_model(ModelTier.SMALL, component="test").model_name == "deepseek-flash"
     # LARGE uses Flash until a better model is chosen. See the TODO in core/model.py.
-    assert get_chat_model("large").model_name == "deepseek-flash"
+    assert get_chat_model("large", component="test").model_name == "deepseek-flash"
 
 
 def test_every_tier_connects_to_the_configured_base_url():
     for tier in ModelTier:
-        assert get_chat_model(tier).api_base == "https://api.deepseek.com"
+        assert get_chat_model(tier, component="test").api_base == "https://api.deepseek.com"
 
 
 def test_unknown_tier_is_named_in_the_error():
     with pytest.raises(ValueError, match="'huge'.*small, large"):
-        get_chat_model("huge")
+        get_chat_model("huge", component="test")
 
 
 def test_missing_key_gives_a_clear_error(monkeypatch):
@@ -102,17 +50,17 @@ def test_missing_key_gives_a_clear_error(monkeypatch):
     get_settings.cache_clear()
 
     with pytest.raises(ConfigError, match="DEEPSEEK_API_KEY"):
-        get_chat_model(ModelTier.SMALL)
+        get_chat_model(ModelTier.SMALL, component="test")
 
 
 def test_api_key_is_hidden_when_printed():
-    assert "not-a-real-key" not in repr(get_chat_model(ModelTier.SMALL))
+    assert "not-a-real-key" not in repr(get_chat_model(ModelTier.SMALL, component="test"))
 
 
 @pytest.mark.parametrize("tier", list(ModelTier))
 def test_request_turns_thinking_off(tier):
     fake = FakeDeepSeek([{"role": "assistant", "content": "hi"}])
-    model = get_chat_model(tier, max_tokens=50)
+    model = get_chat_model(tier, component="test", max_tokens=50)
     fake.attach(model)
 
     model.invoke([HumanMessage("hello")])
@@ -126,7 +74,7 @@ def test_request_turns_thinking_off(tier):
 
 def test_request_keeps_thinking_off_with_tools_bound():
     fake = FakeDeepSeek([{"role": "assistant", "content": "hi"}])
-    model = get_chat_model(ModelTier.SMALL)
+    model = get_chat_model(ModelTier.SMALL, component="test")
     fake.attach(model)
 
     model.bind_tools([lookup_code]).invoke([HumanMessage("hello")])
@@ -138,7 +86,7 @@ def test_request_keeps_thinking_off_with_tools_bound():
 def test_reasoning_tokens_can_be_read_from_usage():
     usage = dict(USAGE, completion_tokens_details={"reasoning_tokens": 3})
     fake = FakeDeepSeek([{"role": "assistant", "content": "hi"}], usage=usage)
-    model = get_chat_model(ModelTier.SMALL)
+    model = get_chat_model(ModelTier.SMALL, component="test")
     fake.attach(model)
 
     message = model.invoke([HumanMessage("hello")])
@@ -162,7 +110,7 @@ def test_deep_agent_tool_loop_with_two_tool_calls():
             {"role": "assistant", "content": "code-alpha and code-beta"},
         ]
     )
-    model = get_chat_model(ModelTier.SMALL)
+    model = get_chat_model(ModelTier.SMALL, component="test")
     fake.attach(model)
     agent = create_deep_agent(model=model, tools=[lookup_code])
 
