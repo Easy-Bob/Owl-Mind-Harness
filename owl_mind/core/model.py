@@ -6,6 +6,7 @@ from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from owl_mind.core.config import ConfigError, get_settings
+from owl_mind.core.telemetry import TokenAccounting
 
 
 class ModelTier(StrEnum):
@@ -23,7 +24,10 @@ _MODEL_IDS = {
 _THINKING_OFF = {"thinking": {"type": "disabled"}}
 
 
-def get_chat_model(tier: ModelTier | str, *, max_tokens: int | None = None) -> BaseChatModel:
+def get_chat_model(
+    tier: ModelTier | str, *, component: str, max_tokens: int | None = None
+) -> BaseChatModel:
+    """Build a chat model. component names who spends the tokens in ops.model_calls."""
     try:
         model_id = _MODEL_IDS[ModelTier(tier)]
     except ValueError:
@@ -43,4 +47,5 @@ def get_chat_model(tier: ModelTier | str, *, max_tokens: int | None = None) -> B
         api_key=settings.deepseek_api_key.get_secret_value(),
         max_tokens=max_tokens,
         extra_body=_THINKING_OFF,
+        callbacks=[TokenAccounting(component=component, model=model_id)],
     )
