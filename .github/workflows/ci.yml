@@ -17,3 +17,15 @@ jobs:
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run pytest
+
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://owl:owl_dev@localhost:5433/owl
+      REDIS_URL: redis://localhost:6380/0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uv sync --locked
+      - run: docker compose up -d --wait postgres redis
+      - run: uv run pytest -m integration
