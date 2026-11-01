@@ -8,7 +8,7 @@ dependencies = [
     "alembic>=1.16",
     "deepagents>=0.7,<0.8",
     "fastapi>=0.115",
-    "langchain-openai>=1.0",
+    "langchain-deepseek>=1.0",
     "langgraph-checkpoint-postgres>=3.0",
     "pgvector>=0.4",
     "prometheus-client>=0.22",
@@ -36,8 +36,11 @@ packages = ["owl_mind"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "--disable-socket --allow-unix-socket -m 'not integration'"
-markers = ["integration: needs the compose services"]
+addopts = "--disable-socket --allow-unix-socket -m 'not integration and not live'"
+markers = [
+    "integration: needs the compose services",
+    "live: calls the DeepSeek API and costs a small amount",
+]
 
 [tool.ruff]
 line-length = 100
