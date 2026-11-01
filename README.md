@@ -31,6 +31,14 @@ The integration tests flush Redis and restart the containers, and they refuse to
 
 `docker compose down -v` deletes all local data. Use `docker compose down` to keep it.
 
+### Live model test
+
+This test calls DeepSeek and costs a small amount, so it runs only on request and never in CI. Set `DEEPSEEK_API_KEY` in `.env`, then run:
+
+```bash
+uv run pytest -m live
+```
+
 ## Planned stack
 
 - Python 3.14, DeepAgents and FastAPI
