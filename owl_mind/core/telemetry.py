@@ -24,6 +24,9 @@ _STREAM_MAX_LENGTH = 100_000
 RUN_ID_KEY = "owl_run_id"
 PROMPT_VERSION_KEY = "owl_prompt_version"
 
+# Opening a tab, viewing history or reconnecting records nothing.
+ACTIVITY_EVENT_TYPES = frozenset({"session_started", "message_sent"})
+
 LLM_CALLS = Counter("llm_calls_total", "Model calls", ["component", "model", "outcome"])
 LLM_TOKENS = Counter("llm_tokens_total", "Model tokens", ["component", "model", "kind"])
 LLM_LATENCY = Histogram(
@@ -49,6 +52,26 @@ def publish(event: dict[str, Any]) -> None:
         maxlen=_STREAM_MAX_LENGTH,
         approximate=True,
     )
+
+
+def record_activity(event_type: str, student_id: uuid.UUID, thread_id: uuid.UUID) -> None:
+    """Record user activity. Metadata only, and a failure never reaches the student."""
+    if event_type not in ACTIVITY_EVENT_TYPES:
+        raise ValueError(f"Not an activity event type: {event_type}")
+    try:
+        publish(
+            {
+                "kind": "activity",
+                "event_id": str(uuid.uuid4()),
+                "event_type": event_type,
+                "student_id": str(student_id),
+                "thread_id": str(thread_id),
+                "occurred_at": datetime.now(UTC).isoformat(),
+            }
+        )
+    except Exception as exc:
+        EVENTS_LOST.inc()
+        logger.warning("Activity event lost: %s", type(exc).__name__)
 
 
 def _usage_fields(message: Any) -> dict[str, Any]:

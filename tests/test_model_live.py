@@ -1,5 +1,6 @@
 """Calls DeepSeek and costs a small amount. Run only on request: uv run pytest -m live"""
 
+import asyncio
 import uuid
 
 import psycopg
@@ -86,3 +87,26 @@ def test_real_call_appears_in_model_calls_with_a_cost(small_model):
     assert hit + miss == input_tokens
     assert complete is True
     assert cost > 0
+
+
+def test_streamed_call_reports_usage_and_no_thinking(small_model):
+    """One call capped by max_tokens. Streaming only reports usage when asked."""
+    run_id = str(uuid.uuid4())
+
+    async def scenario():
+        chunks = []
+        config = {"metadata": {RUN_ID_KEY: run_id}}
+        async for chunk in small_model.astream([HumanMessage("Say ok.")], config=config):
+            chunks.append(chunk)
+        return chunks
+
+    chunks = asyncio.run(scenario())
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged += chunk
+
+    assert merged.text
+    assert merged.usage_metadata["input_tokens"] > 0
+    assert merged.usage_metadata["output_tokens"] > 0
+    assert "cache_read" in merged.usage_metadata["input_token_details"]
+    assert not merged.additional_kwargs.get("reasoning_content")

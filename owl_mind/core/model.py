@@ -47,5 +47,7 @@ def get_chat_model(
         api_key=settings.deepseek_api_key.get_secret_value(),
         max_tokens=max_tokens,
         extra_body=_THINKING_OFF,
+        # Streamed replies only report usage when asked, and telemetry needs it.
+        stream_usage=True,
         callbacks=[TokenAccounting(component=component, model=model_id)],
     )

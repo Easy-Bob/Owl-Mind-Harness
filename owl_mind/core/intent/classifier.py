@@ -1,5 +1,6 @@
 """The intent step: rules, then the small LLM, then the large LLM if enabled."""
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable
@@ -27,6 +28,8 @@ MAX_INTENTS = 2
 PRIMARY_THRESHOLD = 0.7  # Tuned against the eval corpus in M4-D.
 SECONDARY_FLOOR = 0.5
 _MAX_TOKENS = 100
+# Run limits start with the agent, so this call needs its own.
+_TIMEOUT_SECONDS = 30
 
 # Dropped when anything else was asked. Nothing is left undone by ignoring them.
 _NO_ACTION_INTENTS = {Intent.GREETING, Intent.FEEDBACK, Intent.OTHER}
@@ -141,30 +144,36 @@ class IntentStep:
     def __init__(self, get_model: Callable[[ModelTier, str, int], BaseChatModel] | None = None):
         self._get_model = get_model or _default_model
 
-    async def classify(self, message: str) -> IntentResult:
+    async def classify(self, message: str, config: dict | None = None) -> IntentResult:
         match = match_rule(message)
         if match is not None:
             intents = (match.intent,) if match.intent else ()
             return IntentResult(route=match.route, intents=intents, reply=match.reply)
 
-        scored = await self._ask(ModelTier.SMALL, "intent", message)
+        scored = await self._ask(ModelTier.SMALL, "intent", message, config)
         if self._is_confident(scored):
             return build_result(scored, layer=2)
         if not get_settings().intent_layer3_enabled:
             return _clarify(layer=2)
 
-        scored = await self._ask(ModelTier.LARGE, "intent:layer3", message)
+        scored = await self._ask(ModelTier.LARGE, "intent:layer3", message, config)
         return build_result(scored, layer=3) if self._is_confident(scored) else _clarify(layer=3)
 
     @staticmethod
     def _is_confident(scored: list[_Scored]) -> bool:
         return bool(scored) and scored[0].confidence >= PRIMARY_THRESHOLD
 
-    async def _ask(self, tier: ModelTier, component: str, message: str) -> list[_Scored]:
+    async def _ask(
+        self, tier: ModelTier, component: str, message: str, config: dict | None
+    ) -> list[_Scored]:
         """A failed call or bad reply counts as not confident. It never fails the turn."""
         try:
             model = self._get_model(tier, component, _MAX_TOKENS)
-            response = await model.ainvoke([SystemMessage(SYSTEM_PROMPT), HumanMessage(message)])
+            async with asyncio.timeout(_TIMEOUT_SECONDS):
+                response = await model.ainvoke(
+                    [SystemMessage(SYSTEM_PROMPT), HumanMessage(message)],
+                    config={"metadata": (config or {}).get("metadata", {})},
+                )
             return parse_reply(response.content)
         except ValueError as exc:
             logger.warning("Intent reply could not be used: %s", type(exc).__name__)

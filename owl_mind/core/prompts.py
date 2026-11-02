@@ -1,5 +1,7 @@
 """Stable rules only. Prompts say when a tool is useful and never script an order of steps."""
 
+PROMPT_VERSION = "m1"
+
 ENGLISH_RULE = "Always reply in English, whatever language the student writes in."
 
 ORCHESTRATOR = f"""You lead a study assistant for computer-science students. Delegate to a tutor

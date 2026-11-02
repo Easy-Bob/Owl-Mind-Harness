@@ -201,6 +201,14 @@ def check_tool_scopes(declared: dict, built: dict) -> list[Violation]:
     ]
 
 
+def check_activity_event_types(types) -> list[Violation]:
+    """session_started and message_sent are the only activity event types."""
+    extra = set(types) ^ {"session_started", "message_sent"}
+    if not extra:
+        return []
+    return [Violation("activity-types", "<config>", 0, f"unexpected: {sorted(extra)}")]
+
+
 def check_every_call_recorded(model_calls: int, recorded: int) -> list[Violation]:
     """Every model call in a test run produces exactly one telemetry record."""
     if model_calls == recorded:

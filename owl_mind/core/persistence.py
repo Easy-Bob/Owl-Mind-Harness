@@ -40,14 +40,23 @@ def _pool(database_url: str, schema: str) -> AsyncConnectionPool:
 
 
 @asynccontextmanager
-async def open_persistence(database_url: str, embed: EmbeddingsFunc) -> AsyncIterator[Persistence]:
-    """Open the Postgres saver and store. Run the Alembic migrations first."""
+async def open_persistence(
+    database_url: str, embed: EmbeddingsFunc | None = None
+) -> AsyncIterator[Persistence]:
+    """Open the Postgres saver and store. Run the Alembic migrations first.
+
+    With no embed function, the store has no vector index. Nothing searches memory until M3-D.
+    """
     async with _pool(database_url, "lg_checkpoint") as checkpoint_pool:
         async with _pool(database_url, "lg_store") as store_pool:
             checkpointer = AsyncPostgresSaver(checkpoint_pool)
             store = AsyncPostgresStore(
                 store_pool,
-                index={"dims": EMBEDDING_DIMS, "embed": embed, "distance_type": "cosine"},
+                index=(
+                    {"dims": EMBEDDING_DIMS, "embed": embed, "distance_type": "cosine"}
+                    if embed
+                    else None
+                ),
             )
             await checkpointer.setup()
             await store.setup()
