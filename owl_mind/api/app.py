@@ -22,6 +22,7 @@ from owl_mind.core.persistence import open_persistence
 from owl_mind.core.runtime import Services
 from owl_mind.materials.embedding import FastEmbedEmbedder
 from owl_mind.materials.ingest import Ingestor
+from owl_mind.materials.search import MaterialsSearch, RedisSearchCache
 from owl_mind.materials.store import PostgresMaterialsStore
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
 from owl_mind.services.admin_store import PostgresAdminStore
@@ -41,7 +42,9 @@ async def _production_services() -> AsyncIterator[Services]:
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     client = Redis.from_url(settings.redis_url, socket_timeout=_REDIS_TIMEOUT_SECONDS)
     embedder = FastEmbedEmbedder(settings.embedding_model, settings.embedding_cache_dir)
-    ingestor = Ingestor(PostgresMaterialsStore(sessions), embedder, settings.ingest_timeout_seconds)
+    materials_store = PostgresMaterialsStore(sessions)
+    ingestor = Ingestor(materials_store, embedder, settings.ingest_timeout_seconds)
+    search = MaterialsSearch(sessions, materials_store, embedder, RedisSearchCache(client))
     try:
         async with open_persistence(settings.database_url) as persistence:
             yield Services(
@@ -55,6 +58,7 @@ async def _production_services() -> AsyncIterator[Services]:
                 checkpointer=persistence.checkpointer,
                 intent=IntentStep(),
                 ingestor=ingestor,
+                search=search,
             )
     finally:
         await ingestor.shutdown()

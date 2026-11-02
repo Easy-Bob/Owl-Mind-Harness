@@ -61,6 +61,7 @@ class Services:
     intent: IntentStep
     get_model: Callable[..., Any] = get_chat_model
     ingestor: Any = None
+    search: Any = None
 
 
 @dataclass(frozen=True)
@@ -172,7 +173,10 @@ async def _run_agent(
     limit = RUN_LIMITS[result.task_kind]
     translator = StreamTranslator()
     context = RunContext(
-        student_id=request.student_id, store=services.study, today=datetime.now(UTC).date()
+        student_id=request.student_id,
+        store=services.study,
+        today=datetime.now(UTC).date(),
+        search=services.search,
     )
     stream = agent.astream(
         {"messages": [HumanMessage(request.message)]},

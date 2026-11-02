@@ -3,13 +3,14 @@
 import uuid
 from typing import Annotated, Any
 
-from fastapi import Depends, File, Form, HTTPException, UploadFile
+from fastapi import Depends, File, Form, HTTPException, Query, UploadFile
 
 from owl_mind.api.auth import admin_router
 from owl_mind.api.deps import CurrentUser, get_services, require_admin
 from owl_mind.core.config import get_settings
 from owl_mind.core.runtime import Services
 from owl_mind.materials.extract import ExtractionError, file_format
+from owl_mind.materials.search import MAX_RESULTS
 
 ServicesDep = Annotated[Services, Depends(get_services)]
 Admin = Annotated[CurrentUser, Depends(require_admin)]
@@ -78,3 +79,16 @@ async def documents(services: ServicesDep) -> dict[str, Any]:
 async def remove(document_id: uuid.UUID, services: ServicesDep) -> None:
     if not await services.ingestor.store.delete_document(document_id):
         raise HTTPException(status_code=404, detail="Document not found")
+
+
+@admin_router.get("/materials/search")
+async def search(
+    services: ServicesDep,
+    q: Annotated[str, Query(max_length=500)],
+    k: Annotated[int, Query(ge=1, le=MAX_RESULTS)] = 5,
+) -> dict[str, Any]:
+    """Lets an admin check what tutors would find for a question."""
+    if services.search is None:
+        raise HTTPException(status_code=503, detail="Search isn't available.")
+    results = await services.search.search(q, limit=k)
+    return {"results": [vars(result) for result in results]}
