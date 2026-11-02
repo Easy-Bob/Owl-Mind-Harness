@@ -60,6 +60,7 @@ class Services:
     checkpointer: BaseCheckpointSaver
     intent: IntentStep
     get_model: Callable[..., Any] = get_chat_model
+    ingestor: Any = None
 
 
 @dataclass(frozen=True)
