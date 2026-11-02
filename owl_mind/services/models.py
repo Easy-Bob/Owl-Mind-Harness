@@ -5,6 +5,7 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     Float,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Integer,
     MetaData,
     String,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -137,3 +139,32 @@ class RunEvent(Base):
     kind: Mapped[str] = mapped_column(String(32))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Handoff(Base):
+    """A forum draft. Its text reaches GitHub only after the student approves it."""
+
+    __tablename__ = "handoffs"
+    __table_args__ = (Index("ix_handoffs_student_thread", "student_id", "thread_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("students.id"))
+    thread_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("threads.id"))
+    status: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text)
+    graded: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    category: Mapped[str] = mapped_column(Text)
+    url: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ForumPost(Base):
+    __tablename__ = "forum_posts"
+
+    handoff_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("handoffs.id"), primary_key=True)
+    url: Mapped[str] = mapped_column(Text)
+    node_id: Mapped[str] = mapped_column(Text)
+    posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

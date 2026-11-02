@@ -1,6 +1,7 @@
 """FastAPI entry."""
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
@@ -14,12 +15,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from owl_mind.api import materials  # noqa: F401  Registers its routes on admin_router.
 from owl_mind.api.admin import admin_router
 from owl_mind.api.auth import auth_router, check_jwt_secret
+from owl_mind.api.handoffs import router as handoffs_router
 from owl_mind.api.routes import router
 from owl_mind.core.config import get_settings
 from owl_mind.core.events import RedisEventBus
 from owl_mind.core.intent.classifier import IntentStep
 from owl_mind.core.persistence import open_persistence
 from owl_mind.core.runtime import Services
+from owl_mind.forum.github import GitHubForum
+from owl_mind.forum.handoff import HandoffService, PostgresHandoffStore
 from owl_mind.materials.embedding import FastEmbedEmbedder
 from owl_mind.materials.ingest import Ingestor
 from owl_mind.materials.search import MaterialsSearch, RedisSearchCache
@@ -32,6 +36,26 @@ from owl_mind.services.study_store import PostgresStudyStore
 
 # Longer than the stream's idle wait, so that waiting isn't mistaken for a lost connection.
 _REDIS_TIMEOUT_SECONDS = 15
+_HANDOFF_RETRY_SECONDS = 60
+logger = logging.getLogger(__name__)
+
+
+def _forum(settings) -> GitHubForum | None:
+    """Without the forum settings, a draft still works and the student gets a copyable text."""
+    if not (settings.forum_repo and settings.forum_app_id and settings.forum_app_private_key_path):
+        return None
+    return GitHubForum(
+        settings.forum_repo, settings.forum_app_id, settings.forum_app_private_key_path
+    )
+
+
+async def _retry_handoffs(services: Services) -> None:
+    while True:
+        await asyncio.sleep(_HANDOFF_RETRY_SECONDS)
+        try:
+            await services.handoffs.retry_pending()
+        except Exception as exc:
+            logger.warning("Handoff retry failed: %s", type(exc).__name__)
 
 
 @asynccontextmanager
@@ -45,6 +69,8 @@ async def _production_services() -> AsyncIterator[Services]:
     materials_store = PostgresMaterialsStore(sessions)
     ingestor = Ingestor(materials_store, embedder, settings.ingest_timeout_seconds)
     search = MaterialsSearch(sessions, materials_store, embedder, RedisSearchCache(client))
+    forum = _forum(settings)
+    handoffs = HandoffService(PostgresHandoffStore(sessions), forum, settings.forum_category)
     try:
         async with open_persistence(settings.database_url) as persistence:
             yield Services(
@@ -59,8 +85,11 @@ async def _production_services() -> AsyncIterator[Services]:
                 intent=IntentStep(),
                 ingestor=ingestor,
                 search=search,
+                handoffs=handoffs,
             )
     finally:
+        if forum is not None:
+            await forum.aclose()
         await ingestor.shutdown()
         await client.aclose()
         await engine.dispose()
@@ -77,7 +106,13 @@ def create_app(services_factory: Callable = _production_services) -> FastAPI:
             if services.ingestor is not None:
                 # The file is only held in memory, so an interrupted import can't resume.
                 await services.ingestor.store.fail_unfinished_jobs()
+            retrying = None
+            if services.handoffs is not None:
+                await services.handoffs.store.fail_unfinished()
+                retrying = asyncio.create_task(_retry_handoffs(services))
             yield
+            if retrying is not None:
+                retrying.cancel()
             for task in list(app.state.run_tasks):
                 task.cancel()
             await asyncio.gather(*app.state.run_tasks, return_exceptions=True)
@@ -86,6 +121,7 @@ def create_app(services_factory: Callable = _production_services) -> FastAPI:
     application.include_router(auth_router)
     application.include_router(admin_router)
     application.include_router(router)
+    application.include_router(handoffs_router)
 
     @application.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:

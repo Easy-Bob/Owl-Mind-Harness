@@ -203,6 +203,34 @@ test("model output with HTML doesn't run, and Markdown still renders", async ({ 
   expect(await page.evaluate(() => (window as { pwned?: boolean }).pwned)).toBeUndefined();
 });
 
+test("asking for a tutor shows a draft that is posted only after approval", async ({ page }) => {
+  await signUp(page);
+  const approvals: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().includes("/approve")) {
+      approvals.push(request.postData() ?? "");
+    }
+  });
+  await send(page, "I want to talk to a TA about BFS");
+
+  const card = page.getByRole("region", { name: "Forum post draft" });
+  await expect(card).toBeVisible();
+  await expect(card.getByRole("link", { name: "An older question" })).toBeVisible();
+  expect(approvals).toHaveLength(0);
+
+  await card.getByLabel("Title").fill("BFS visits nodes twice");
+  await card.getByRole("button", { name: "Approve and post" }).dblclick();
+
+  const posted = page.getByRole("region", { name: "Forum post" });
+  await expect(posted.getByRole("link", { name: "BFS visits nodes twice" })).toBeVisible();
+  expect(approvals).toHaveLength(1);
+  expect(JSON.parse(approvals[0]).title).toBe("BFS visits nodes twice");
+
+  await page.reload();
+  await sessions(page).first().getByRole("button").click();
+  await expect(page.getByRole("region", { name: "Forum post" })).toContainText("Posted to the forum");
+});
+
 test("a double click on Send starts one run", async ({ page }) => {
   await signUp(page);
   const starts: string[] = [];

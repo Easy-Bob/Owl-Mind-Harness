@@ -4,7 +4,7 @@ import { defineConfig } from "vitest/config";
 // The browser only talks to this server, so the login cookie works without any cross-site setup.
 const apiUrl = process.env.API_URL ?? "http://localhost:8010";
 const proxy = Object.fromEntries(
-  ["/auth", "/threads", "/runs", "/admin"].map((path) => [path, { target: apiUrl }]),
+  ["/auth", "/threads", "/runs", "/admin", "/handoffs"].map((path) => [path, { target: apiUrl }]),
 );
 
 export default defineConfig({

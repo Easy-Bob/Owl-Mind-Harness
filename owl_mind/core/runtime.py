@@ -22,6 +22,7 @@ from owl_mind.core.intent.taxonomy import Reply, Route, TaskKind
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.prompts import PROMPT_VERSION
 from owl_mind.core.streaming import STREAM_MODES, StreamTranslator
+from owl_mind.forum.handoff import known_values
 from owl_mind.services.accounts import AccountStore, LoginLimiter
 from owl_mind.services.admin_store import AdminStore
 from owl_mind.services.run_store import RunStore
@@ -62,6 +63,7 @@ class Services:
     get_model: Callable[..., Any] = get_chat_model
     ingestor: Any = None
     search: Any = None
+    handoffs: Any = None
 
 
 @dataclass(frozen=True)
@@ -138,13 +140,41 @@ async def _record_turn(
     )
 
 
+async def _draft_handoff(services: Services, request: RunRequest, emit: _Emitter) -> str:
+    """Draft a forum post from a template, with no model. The student reviews it on a card."""
+    history = await read_history(services.checkpointer, request.thread_id)
+    earlier = [m["content"] for m in history if m["role"] == "user" and m["content"]][-3:]
+    account = await services.accounts.get_by_id(request.student_id)
+    handoff, removed, similar = await services.handoffs.draft(
+        request.student_id,
+        request.thread_id,
+        request.message,
+        earlier,
+        known_values(account.email) if account else [],
+    )
+    await emit(
+        "handoff_draft",
+        {
+            "id": str(handoff.id),
+            "removed": removed,
+            "similar": [{"title": s.title, "url": s.url} for s in similar],
+        },
+    )
+    return replies.HANDOFF_DRAFTED
+
+
 def _kind(result: IntentResult) -> str | None:
     return result.task_kind.value if result.task_kind else None
 
 
-async def _fixed_reply(services: Services, request: RunRequest, result: IntentResult) -> str:
+async def _fixed_reply(
+    services: Services, request: RunRequest, result: IntentResult, emit: _Emitter
+) -> str:
     if result.route is Route.HANDOFF:
-        text = replies.HANDOFF_UNAVAILABLE
+        if services.handoffs is None:
+            text = replies.HANDOFF_UNAVAILABLE
+        else:
+            text = await _draft_handoff(services, request, emit)
     elif result.reply is Reply.DUE_TOPICS:
         today = datetime.now(UTC).date()
         text = replies.due_topics(await services.study.due_topics(request.student_id, today))
@@ -226,7 +256,8 @@ async def execute_run(services: Services, request: RunRequest) -> None:
             except LiveAgentRunsDisabled:
                 await _answer(services, request, replies.AGENTS_UNAVAILABLE, emit)
         else:
-            await _answer(services, request, await _fixed_reply(services, request, result), emit)
+            text = await _fixed_reply(services, request, result, emit)
+            await _answer(services, request, text, emit)
     except _RunStopped as stopped:
         await emit("text_delta", {"text": replies.RUN_STOPPED})
         await _finish(services, request, "stopped", emit, "done", reason=stopped.reason)

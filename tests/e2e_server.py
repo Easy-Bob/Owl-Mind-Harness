@@ -20,6 +20,8 @@ from owl_mind.core.intent.classifier import IntentStep
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.persistence import open_persistence
 from owl_mind.core.runtime import Services
+from owl_mind.forum.github import ForumPost, SimilarPost
+from owl_mind.forum.handoff import HandoffService, PostgresHandoffStore
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
 from owl_mind.services.admin_store import PostgresAdminStore
 from owl_mind.services.models import sqlalchemy_url
@@ -76,6 +78,25 @@ def _line(chunk: dict) -> bytes:
     return f"data: {json.dumps(chunk)}\n\n".encode()
 
 
+class LocalForum:
+    """Stands in for GitHub, so a browser test can never post to the real forum."""
+
+    home_url = "http://127.0.0.1:4173/forum"
+
+    def __init__(self) -> None:
+        self.posts: list[tuple[str, str]] = []
+
+    async def search_similar(self, text: str, limit: int = 3) -> list[SimilarPost]:
+        return [SimilarPost("An older question", f"{self.home_url}/1")]
+
+    async def post_question(self, category: str, title: str, body: str) -> ForumPost:
+        self.posts.append((title, body))
+        return ForumPost(f"{self.home_url}/{len(self.posts)}", f"D_{len(self.posts)}")
+
+    async def get_replies(self, node_id: str) -> list:
+        return []
+
+
 @asynccontextmanager
 async def _services():
     settings = get_settings()
@@ -102,6 +123,7 @@ async def _services():
                 checkpointer=persistence.checkpointer,
                 intent=IntentStep(lambda tier, c, m: get_model(tier, component=c, max_tokens=m)),
                 get_model=get_model,
+                handoffs=HandoffService(PostgresHandoffStore(sessions), LocalForum(), "Q&A"),
             )
     finally:
         await client.aclose()

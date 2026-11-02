@@ -14,6 +14,9 @@ SKIPPED_DIRS = {".git", ".venv", "__pycache__", "build", "dist", "node_modules"}
 MODEL_MODULE = "owl_mind/core/model.py"
 CONFIG_MODULE = "owl_mind/core/config.py"
 FACTORY_MODULE = "owl_mind/core/factory.py"
+FORUM_PACKAGE = "owl_mind.forum"
+# The fixed handoff path. No agent, tool or subagent module may reach the forum.
+FORUM_USERS = {"owl_mind/api/app.py", "owl_mind/api/handoffs.py", "owl_mind/core/runtime.py"}
 
 PROVIDER_MODULES = {
     "anthropic",
@@ -184,6 +187,27 @@ def check_agent_construction(root: Path) -> list[Violation]:
     return found
 
 
+def check_forum_access(root: Path) -> list[Violation]:
+    """Only the fixed handoff path imports the forum client, so an agent can never post."""
+    rule = "forum-access"
+    found = []
+    for path, tree, error in _product_trees(root, rule):
+        if error:
+            found.append(error)
+        elif path not in FORUM_USERS and not path.startswith("owl_mind/forum/"):
+            for node in ast.walk(tree):
+                match node:
+                    case ast.ImportFrom(module=module) if module and (
+                        module == FORUM_PACKAGE or module.startswith(FORUM_PACKAGE + ".")
+                    ):
+                        found.append(Violation(rule, path, node.lineno, "imports the forum"))
+                    case ast.Import(names=names) if any(
+                        alias.name.startswith(FORUM_PACKAGE) for alias in names
+                    ):
+                        found.append(Violation(rule, path, node.lineno, "imports the forum"))
+    return found
+
+
 def check_models_from_door(models: list) -> list[Violation]:
     """Every model given to an agent has token accounting, which only core/model.py attaches."""
     return [
@@ -278,4 +302,5 @@ ALL_CHECKS = (
     check_no_top_level_mcp,
     check_ascii_source,
     check_agent_construction,
+    check_forum_access,
 )

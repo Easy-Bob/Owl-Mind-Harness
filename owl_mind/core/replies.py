@@ -10,6 +10,10 @@ TEXT: dict[Reply, str] = {
     Reply.FEEDBACK: "Thanks for telling me. What would you like to do next?",
     Reply.CLARIFY: "I'm not sure what you need. Could you say a little more about it?",
 }
+HANDOFF_DRAFTED = (
+    "I drafted a forum post for a tutor. Check it below, change anything you like, then approve it."
+    " Nothing is posted until you do."
+)
 HANDOFF_UNAVAILABLE = "Posting to the forum isn't available yet, so I can't reach a tutor for you."
 AGENTS_UNAVAILABLE = "Tutoring answers aren't available yet. This feature is still being built."
 RUN_STOPPED = "I had to stop before finishing this answer. Please try asking again."
