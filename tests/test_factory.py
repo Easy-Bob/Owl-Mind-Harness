@@ -8,6 +8,7 @@ from datetime import date
 import pytest
 from deepagents import HarnessProfile, register_harness_profile
 from langchain_core.messages import HumanMessage
+from langgraph.store.memory import InMemoryStore
 
 from owl_mind.core import factory, telemetry
 from owl_mind.core.config import get_settings
@@ -22,7 +23,7 @@ from tests.guard_rails import check_models_from_door, check_tool_scopes
 
 ALICE = uuid.UUID(int=1)
 TODAY = date(2026, 11, 2)
-# What DeepAgents gives every agent. M1-C restricts these with permissions.
+# What DeepAgents gives every agent. Permissions restrict what they can reach.
 FILE_TOOLS = {"ls", "read_file", "write_file", "edit_file", "glob", "grep", "delete"}
 
 
@@ -74,7 +75,9 @@ class Run:
         return model
 
     def invoke(self, task_kind, subagents, message="help me"):
-        agent = build_owl_agent(task_kind, subagents, get_model=self.get_model)
+        agent = build_owl_agent(
+            task_kind, subagents, store=InMemoryStore(), get_model=self.get_model
+        )
         context = RunContext(student_id=ALICE, store=self.store, today=TODAY)
         return asyncio.run(agent.ainvoke({"messages": [HumanMessage(message)]}, context=context))
 
@@ -286,7 +289,7 @@ def test_every_prompt_requires_english():
     run.invoke(TaskKind.LEARN, [Subagent.CONCEPT_TUTOR], message="\u00bfQu\u00e9 es BFS?")
 
     for request in run.fake.requests:
-        assert "Always reply in English" in request["messages"][0]["content"]
+        assert "Always reply in English" in json.dumps(request["messages"][0]["content"])
 
 
 def test_prompt_prefix_and_tools_are_the_same_on_every_build():
