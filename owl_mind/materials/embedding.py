@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 EMBEDDING_DIMS = 384
-_BATCH_SIZE = 64
+# Measured on the course files: batches of 64 added about 570 MB of scratch memory, batches of 8
+# with the memory pool off about 67 MB, at the same speed.
+_BATCH_SIZE = 8
 
 
 @runtime_checkable
@@ -27,7 +29,11 @@ class FastEmbedEmbedder:
             if self._model is None:
                 from fastembed import TextEmbedding
 
-                self._model = TextEmbedding(self._model_name, cache_dir=str(self._cache_dir))
+                self._model = TextEmbedding(
+                    self._model_name,
+                    cache_dir=str(self._cache_dir),
+                    enable_cpu_mem_arena=False,
+                )
         return self._model
 
     def embed(self, texts: list[str]) -> list[list[float]]:

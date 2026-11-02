@@ -3,6 +3,7 @@
 import uuid
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 from owl_mind.services.study_store import StudyStore
 
@@ -12,3 +13,5 @@ class RunContext:
     student_id: uuid.UUID
     store: StudyStore
     today: date
+    # MaterialsSearch, or None where there are no materials, such as in some tests.
+    search: Any = None

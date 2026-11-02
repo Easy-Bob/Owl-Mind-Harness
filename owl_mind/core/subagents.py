@@ -7,6 +7,7 @@ from langchain_core.tools import BaseTool
 from owl_mind.core import prompts
 from owl_mind.core.intent.taxonomy import Subagent
 from owl_mind.tools.concept import get_prerequisites
+from owl_mind.tools.materials import materials_search
 from owl_mind.tools.planner import get_due_topics, propose_study_plan, schedule_review
 from owl_mind.tools.practice import analyze_complexity, build_hint
 from owl_mind.tools.quiz import generate_quiz_spec, grade_answer, pin_rubric
@@ -22,23 +23,23 @@ class TutorSpec:
 
 # The scopes on their own, so a guard rail can compare them with what each tutor is built with.
 TOOL_SCOPES: dict[Subagent, tuple[str, ...]] = {
-    Subagent.CONCEPT_TUTOR: ("get_prerequisites",),
-    Subagent.PRACTICE_COACH: ("build_hint", "analyze_complexity"),
+    Subagent.CONCEPT_TUTOR: ("materials_search", "get_prerequisites"),
+    Subagent.PRACTICE_COACH: ("materials_search", "build_hint", "analyze_complexity"),
     Subagent.STUDY_PLANNER: ("schedule_review", "get_due_topics", "propose_study_plan"),
-    Subagent.QUIZ_MASTER: ("generate_quiz_spec", "pin_rubric", "grade_answer"),
+    Subagent.QUIZ_MASTER: ("materials_search", "generate_quiz_spec", "pin_rubric", "grade_answer"),
 }
 
 TUTORS: dict[Subagent, TutorSpec] = {
     Subagent.CONCEPT_TUTOR: TutorSpec(
         "Explains computer-science concepts.",
         prompts.CONCEPT_TUTOR,
-        (get_prerequisites,),
+        (materials_search, get_prerequisites),
         1200,
     ),
     Subagent.PRACTICE_COACH: TutorSpec(
         "Guides a student through a problem with hints, without giving solutions.",
         prompts.PRACTICE_COACH,
-        (build_hint, analyze_complexity),
+        (materials_search, build_hint, analyze_complexity),
         1000,
     ),
     Subagent.STUDY_PLANNER: TutorSpec(
@@ -50,7 +51,7 @@ TUTORS: dict[Subagent, TutorSpec] = {
     Subagent.QUIZ_MASTER: TutorSpec(
         "Writes quizzes and grades answers against pinned rubrics.",
         prompts.QUIZ_MASTER,
-        (generate_quiz_spec, pin_rubric, grade_answer),
+        (materials_search, generate_quiz_spec, pin_rubric, grade_answer),
         1200,
     ),
 }
