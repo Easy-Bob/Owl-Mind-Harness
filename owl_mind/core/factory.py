@@ -10,7 +10,11 @@ from deepagents import (
 )
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.store.base import BaseStore
 
+from owl_mind.backends.composite import SKILL_SOURCES, build_backend
+from owl_mind.backends.permissions import ORCHESTRATOR_PERMISSIONS, TUTOR_PERMISSIONS
 from owl_mind.core import prompts
 from owl_mind.core.config import get_settings
 from owl_mind.core.intent.taxonomy import Subagent, TaskKind
@@ -40,7 +44,12 @@ GetModel = Callable[..., BaseChatModel]
 
 
 def build_owl_agent(
-    task_kind: TaskKind, subagents: Sequence[Subagent], *, get_model: GetModel = get_chat_model
+    task_kind: TaskKind,
+    subagents: Sequence[Subagent],
+    *,
+    store: BaseStore,
+    checkpointer: BaseCheckpointSaver | None = None,
+    get_model: GetModel = get_chat_model,
 ):
     """Assemble the setup for one turn. The model chooses the steps inside these limits."""
     if not get_settings().live_agent_runs_enabled:
@@ -52,6 +61,8 @@ def build_owl_agent(
             "description": TUTORS[subagent].description,
             "system_prompt": TUTORS[subagent].system_prompt,
             "tools": list(TUTORS[subagent].tools),
+            "permissions": TUTOR_PERMISSIONS[subagent],
+            "skills": SKILL_SOURCES,
             "model": get_model(
                 ModelTier.SMALL,
                 component=f"agent:{subagent.value}",
@@ -73,4 +84,8 @@ def build_owl_agent(
         subagents=specs,
         middleware=[TodoListMiddleware()] if is_composite else [],
         context_schema=RunContext,
+        backend=build_backend(),
+        permissions=ORCHESTRATOR_PERMISSIONS,
+        store=store,
+        checkpointer=checkpointer,
     )
