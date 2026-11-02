@@ -39,7 +39,7 @@ function errorMessage(status: number, data: { detail?: unknown } | null): string
   return "Something went wrong on the server. Please try again.";
 }
 
-async function request<T>(path: string, body?: unknown): Promise<T> {
+export async function request<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method: body === undefined ? "GET" : "POST",
     headers: body === undefined ? undefined : { "content-type": "application/json" },

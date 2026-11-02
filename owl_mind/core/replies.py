@@ -7,7 +7,6 @@ TEXT: dict[Reply, str] = {
     Reply.GREETING: "Hello! What would you like to study today?",
     Reply.THANKS: "You're welcome. What would you like to do next?",
     Reply.OFF_TOPIC: "I can only help with studying computer science. What are you working on?",
-    Reply.PROGRESS: "Progress reports aren't available yet.",
     Reply.FEEDBACK: "Thanks for telling me. What would you like to do next?",
     Reply.CLARIFY: "I'm not sure what you need. Could you say a little more about it?",
 }
@@ -21,6 +20,12 @@ def due_topics(topics: list[str]) -> str:
     if not topics:
         return "Nothing is due for review today."
     return "Due for review today: " + ", ".join(topics) + "."
+
+
+def progress(scheduled: int, due: int) -> str:
+    if not scheduled:
+        return "You have no topics scheduled for review yet."
+    return f"You have {scheduled} topics scheduled for review, and {due} are due today."
 
 
 def left_out_note(intents: tuple[Intent, ...]) -> str:

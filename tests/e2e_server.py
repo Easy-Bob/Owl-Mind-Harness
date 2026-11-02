@@ -21,6 +21,7 @@ from owl_mind.core.model import get_chat_model
 from owl_mind.core.persistence import open_persistence
 from owl_mind.core.runtime import Services
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
+from owl_mind.services.admin_store import PostgresAdminStore
 from owl_mind.services.models import sqlalchemy_url
 from owl_mind.services.run_store import PostgresRunStore
 from owl_mind.services.study_store import PostgresStudyStore
@@ -91,6 +92,7 @@ async def _services():
     try:
         async with open_persistence(settings.database_url) as persistence:
             yield Services(
+                admin=PostgresAdminStore(sessions),
                 accounts=PostgresAccountStore(sessions),
                 limiter=RedisLoginLimiter(client),
                 runs=PostgresRunStore(sessions),

@@ -11,7 +11,8 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from owl_mind.api.auth import admin_router, auth_router, check_jwt_secret
+from owl_mind.api.admin import admin_router
+from owl_mind.api.auth import auth_router, check_jwt_secret
 from owl_mind.api.routes import router
 from owl_mind.core.config import get_settings
 from owl_mind.core.events import RedisEventBus
@@ -19,6 +20,7 @@ from owl_mind.core.intent.classifier import IntentStep
 from owl_mind.core.persistence import open_persistence
 from owl_mind.core.runtime import Services
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
+from owl_mind.services.admin_store import PostgresAdminStore
 from owl_mind.services.models import sqlalchemy_url
 from owl_mind.services.run_store import PostgresRunStore
 from owl_mind.services.study_store import PostgresStudyStore
@@ -37,6 +39,7 @@ async def _production_services() -> AsyncIterator[Services]:
     try:
         async with open_persistence(settings.database_url) as persistence:
             yield Services(
+                admin=PostgresAdminStore(sessions),
                 accounts=PostgresAccountStore(sessions),
                 limiter=RedisLoginLimiter(client),
                 runs=PostgresRunStore(sessions),

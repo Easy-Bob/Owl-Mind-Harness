@@ -11,6 +11,7 @@ const repoRoot = path.resolve(import.meta.dirname, "../..");
 const apiUrl = "http://localhost:8012";
 const password = "correct horse battery";
 const invite = "e2e-invite";
+const adminEmail = "e2e-admin@example.com";
 const env = {
   ...process.env,
   DATABASE_URL: "postgresql://owl:owl_dev@localhost:5433/owl",
@@ -20,10 +21,11 @@ const env = {
   JWT_SECRET: "e".repeat(32),
   COOKIE_SECURE: "false",
   INVITE_CODES: invite,
-  CONFIGURED_ADMINS: "",
+  CONFIGURED_ADMINS: adminEmail,
 };
 
 let api: ChildProcess;
+let consumer: ChildProcess;
 
 // The browser reaches the web server through this, so that a test can really cut a live stream.
 const proxySockets = new Set<net.Socket>();
@@ -64,12 +66,18 @@ async function stopApi() {
 test.beforeAll(async () => {
   execFileSync("uv", ["run", "alembic", "upgrade", "head"], { cwd: repoRoot, env });
   await startApi();
+  consumer = spawn("uv", ["run", "python", "-m", "owl_mind.worker.telemetry"], {
+    cwd: repoRoot,
+    env,
+    stdio: "inherit",
+  });
   await new Promise<void>((resolve) => proxy.listen(4174, "127.0.0.1", resolve));
 });
 
 test.afterAll(async () => {
   cutLiveConnections();
   proxy.close();
+  consumer.kill();
   await stopApi();
 });
 
@@ -272,4 +280,66 @@ test("the chat can be used with only the keyboard", async ({ page }) => {
   await page.keyboard.press("Shift+Enter");
   await page.keyboard.type("line two");
   await expect(page.getByLabel("Your message")).toHaveValue("line one\nline two");
+});
+
+test("an admin sees a student's request, tokens and timeline, with no message text", async ({ page, browser }) => {
+  const studentContext = await browser.newContext({ baseURL: "http://localhost:4174" });
+  const student = await studentContext.newPage();
+  await signUp(student);
+  const email = await student.getByRole("navigation", { name: "Sessions" }).getByText("@example.com").textContent();
+  const secret = `secret-message-${randomUUID()}`;
+  await send(student, secret);
+  await expect(answers(student)).toContainText("Answer to:");
+  await send(student, "hi");
+  await expect(answers(student).last()).toContainText("Hello");
+
+  // A second signup attempt on later runs just answers 409.
+  await page.request.post("/auth/signup", {
+    data: { email: adminEmail, password, invite_code: invite, accepted_notice: true },
+  });
+  await page.goto("/");
+  await page.getByLabel("Email").fill(adminEmail);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Log in" }).click();
+  await page.getByRole("button", { name: "Admin" }).click();
+
+  await page.getByLabel("Search by email or run ID").fill(email!);
+  await page.getByRole("button", { name: "Search" }).click();
+  const rows = page.getByRole("row");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(1)).toContainText("template");
+  await expect(rows.nth(2)).toContainText("orchestrated");
+  await expect(page.locator("body")).not.toContainText(secret);
+
+  // The consumer writes model calls just after a run, so reopen until they're there.
+  await expect(async () => {
+    await rows.nth(2).getByRole("button", { name: "Open" }).click();
+    try {
+      await expect(page.getByRole("cell", { name: "orchestrator" }).first()).toBeVisible({ timeout: 1000 });
+    } catch (error) {
+      await page.getByRole("button", { name: "Back to requests" }).click();
+      throw error;
+    }
+  }).toPass({ timeout: 30_000 });
+  await expect(page.getByText("recorded in the access log")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "intent" })).toBeVisible();
+  await expect(page.getByText("usage", { exact: true })).toBeVisible();
+  await expect(page.locator("body")).not.toContainText(secret);
+
+  await page.getByRole("button", { name: "Back to requests" }).click();
+  await page.getByRole("button", { name: "Model calls" }).click();
+  await expect(page.getByRole("heading", { name: "By component" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "orchestrator" }).first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Chat" }).click();
+  await expect(page.getByLabel("Your message")).toBeVisible();
+  await studentContext.close();
+});
+
+test("a student is refused admin data even when asking directly", async ({ page }) => {
+  await signUp(page);
+  for (const path of ["/admin/requests", "/admin/model-calls", "/admin/me"]) {
+    expect((await page.request.get(path)).status()).toBe(403);
+  }
+  await expect(page.getByRole("button", { name: "Admin" })).toHaveCount(0);
 });
