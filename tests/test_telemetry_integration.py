@@ -304,7 +304,9 @@ def wait_for(check, seconds: float = 40):
 
 
 @pytest.fixture
-def running_app():
+def running_app(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "x" * 32)
+    get_settings.cache_clear()
     # Prometheus runs in a container, so the app must listen beyond localhost.
     server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=8010, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)

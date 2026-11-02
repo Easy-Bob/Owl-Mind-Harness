@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     intent_layer3_enabled: bool = False
     live_agent_runs_enabled: bool = False
+    jwt_secret: SecretStr | None = None
+    cookie_secure: bool = True
+    configured_admins: str = ""
+    invite_codes: SecretStr = SecretStr("")
 
 
 @lru_cache

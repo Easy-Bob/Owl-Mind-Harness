@@ -22,6 +22,7 @@ from owl_mind.core.intent.taxonomy import Reply, Route, TaskKind
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.prompts import PROMPT_VERSION
 from owl_mind.core.streaming import STREAM_MODES, StreamTranslator
+from owl_mind.services.accounts import AccountStore, LoginLimiter
 from owl_mind.services.run_store import RunStore
 from owl_mind.services.study_store import StudyStore
 from owl_mind.tools.context import RunContext
@@ -48,6 +49,8 @@ RUN_LIMITS: dict[TaskKind, RunLimit] = {
 
 @dataclass(frozen=True)
 class Services:
+    accounts: AccountStore
+    limiter: LoginLimiter
     runs: RunStore
     study: StudyStore
     events: EventBus
