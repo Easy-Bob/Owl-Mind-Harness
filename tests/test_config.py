@@ -6,7 +6,13 @@ from pytest_socket import SocketBlockedError
 
 from owl_mind.core.config import ConfigError, get_settings
 
-ENV_NAMES = ("DATABASE_URL", "REDIS_URL", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL")
+ENV_NAMES = (
+    "DATABASE_URL",
+    "REDIS_URL",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_BASE_URL",
+    "INTENT_LAYER3_ENABLED",
+)
 
 
 @pytest.fixture(autouse=True)

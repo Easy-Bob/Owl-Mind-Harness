@@ -64,3 +64,11 @@ class FakeDeepSeek:
         )
         model.root_client = client
         model.client = client.chat.completions
+        async_client = openai.AsyncOpenAI(
+            api_key="not-a-real-key",
+            base_url="https://api.deepseek.com",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(self)),
+            max_retries=0,
+        )
+        model.root_async_client = async_client
+        model.async_client = async_client.chat.completions
