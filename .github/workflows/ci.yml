@@ -11,6 +11,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
@@ -20,6 +21,7 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       DATABASE_URL: postgresql://owl:owl_dev@localhost:5433/owl
       REDIS_URL: redis://localhost:6380/0

@@ -43,6 +43,37 @@ LIMIT 1
 """
 
 
+_INSERT_ACTIVITY = """
+INSERT INTO ops.activity_events (event_id, student_id, thread_id, event_type, occurred_at)
+VALUES (%(event_id)s, %(student_id)s, %(thread_id)s, %(event_type)s, %(occurred_at)s)
+ON CONFLICT (event_id) DO NOTHING
+"""
+
+_COUNT_ACTIVITY = """
+INSERT INTO ops.activity_daily (student_id, day, sessions_started, messages_sent)
+VALUES (%(student_id)s, %(day)s, %(sessions)s, %(messages)s)
+ON CONFLICT (student_id, day) DO UPDATE SET
+    sessions_started = ops.activity_daily.sessions_started + EXCLUDED.sessions_started,
+    messages_sent = ops.activity_daily.messages_sent + EXCLUDED.messages_sent
+"""
+
+
+def _write_activity(event: dict[str, Any], db: psycopg.Connection) -> None:
+    # Count only a newly written event, so a redelivered one can't count twice.
+    if db.execute(_INSERT_ACTIVITY, event).rowcount == 0:
+        return
+    day = datetime.fromisoformat(event["occurred_at"]).astimezone(UTC).date()
+    db.execute(
+        _COUNT_ACTIVITY,
+        {
+            "student_id": event["student_id"],
+            "day": day,
+            "sessions": int(event["event_type"] == "session_started"),
+            "messages": int(event["event_type"] == "message_sent"),
+        },
+    )
+
+
 def time_band(called_at: datetime) -> str:
     """DeepSeek's peak hours in UTC. Chinese public holidays are off-peak but not modeled yet."""
     utc = called_at.astimezone(UTC)
@@ -101,7 +132,10 @@ def process_once(client: redis.Redis, db: psycopg.Connection, block_ms: int = 0)
             # A savepoint per event, so dropping a bad one keeps the good rows in this batch.
             with db.transaction():
                 event = json.loads(fields[b"event"])
-                db.execute(_INSERT, _row(event, db))
+                if event.get("kind") == "activity":
+                    _write_activity(event, db)
+                else:
+                    db.execute(_INSERT, _row(event, db))
         except KeyError, ValueError, TypeError, psycopg.DataError, psycopg.IntegrityError:
             # A malformed event can never succeed, so retrying would block the stream.
             logger.warning("Dropped malformed telemetry event %s", message_id)

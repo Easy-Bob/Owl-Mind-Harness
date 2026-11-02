@@ -405,5 +405,6 @@ def test_request_sends_prompt_and_message_with_a_token_cap():
     assert body["messages"][0]["content"] == SYSTEM_PROMPT
     assert body["messages"][1]["content"] == "explain BFS"
     assert body["max_tokens"] == 100
+    assert body.get("stream") is not True
     assert body["thinking"] == {"type": "disabled"}
     assert "tools" not in body
