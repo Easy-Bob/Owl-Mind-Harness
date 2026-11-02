@@ -11,6 +11,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from owl_mind.api import materials  # noqa: F401  Registers its routes on admin_router.
 from owl_mind.api.admin import admin_router
 from owl_mind.api.auth import auth_router, check_jwt_secret
 from owl_mind.api.routes import router
@@ -19,6 +20,9 @@ from owl_mind.core.events import RedisEventBus
 from owl_mind.core.intent.classifier import IntentStep
 from owl_mind.core.persistence import open_persistence
 from owl_mind.core.runtime import Services
+from owl_mind.materials.embedding import FastEmbedEmbedder
+from owl_mind.materials.ingest import Ingestor
+from owl_mind.materials.store import PostgresMaterialsStore
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
 from owl_mind.services.admin_store import PostgresAdminStore
 from owl_mind.services.models import sqlalchemy_url
@@ -36,6 +40,8 @@ async def _production_services() -> AsyncIterator[Services]:
     engine = create_async_engine(sqlalchemy_url(settings.database_url))
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     client = Redis.from_url(settings.redis_url, socket_timeout=_REDIS_TIMEOUT_SECONDS)
+    embedder = FastEmbedEmbedder(settings.embedding_model, settings.embedding_cache_dir)
+    ingestor = Ingestor(PostgresMaterialsStore(sessions), embedder, settings.ingest_timeout_seconds)
     try:
         async with open_persistence(settings.database_url) as persistence:
             yield Services(
@@ -48,8 +54,10 @@ async def _production_services() -> AsyncIterator[Services]:
                 store=persistence.store,
                 checkpointer=persistence.checkpointer,
                 intent=IntentStep(),
+                ingestor=ingestor,
             )
     finally:
+        await ingestor.shutdown()
         await client.aclose()
         await engine.dispose()
 
@@ -62,6 +70,9 @@ def create_app(services_factory: Callable = _production_services) -> FastAPI:
             app.state.services = services
             # One process until M4-B, so any unfinished run was left by a restart.
             await services.runs.fail_unfinished_runs()
+            if services.ingestor is not None:
+                # The file is only held in memory, so an interrupted import can't resume.
+                await services.ingestor.store.fail_unfinished_jobs()
             yield
             for task in list(app.state.run_tasks):
                 task.cancel()

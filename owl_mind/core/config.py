@@ -1,6 +1,7 @@
 """The only module that reads the environment."""
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,6 +24,10 @@ class Settings(BaseSettings):
     cookie_secure: bool = True
     configured_admins: str = ""
     invite_codes: SecretStr = SecretStr("")
+    max_upload_mb: int = 25
+    ingest_timeout_seconds: int = 120
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_cache_dir: Path = Path.home() / ".cache" / "owl-mind" / "fastembed"
 
 
 @lru_cache
