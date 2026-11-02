@@ -6,6 +6,7 @@ import pytest
 
 from tests.guard_rails import (
     ALL_CHECKS,
+    check_agent_construction,
     check_ascii_source,
     check_env_access,
     check_model_construction,
@@ -54,6 +55,8 @@ def test_repo_follows_the_rule(check):
         (check_no_top_level_mcp, "mcp.py", ""),
         (check_ascii_source, "owl_mind/a.py", "name = 'caf\u00e9'\n"),
         (check_ascii_source, "tests/a.py", "# caf\u00e9\n"),
+        (check_agent_construction, "owl_mind/a.py", "from deepagents import create_deep_agent\n"),
+        (check_agent_construction, "owl_mind/a.py", "deepagents.create_deep_agent()\n"),
         (check_model_construction, "owl_mind/a.py", "def broken(:\n"),
         (check_sampling_params, "owl_mind/a.py", "def broken(:\n"),
         (check_env_access, "owl_mind/a.py", "def broken(:\n"),
@@ -80,6 +83,11 @@ def test_rule_reports_a_deliberate_violation(tmp_path, check, relative, source):
             check_model_construction,
             "owl_mind/a.py",
             "from langchain_core.messages import ChatMessage\n",
+        ),
+        (
+            check_agent_construction,
+            "owl_mind/core/factory.py",
+            "from deepagents import create_deep_agent\n",
         ),
         (check_env_access, "owl_mind/core/config.py", "import os\nos.environ['KEY']\n"),
         (check_env_access, "owl_mind/a.py", "environ = {}\n"),

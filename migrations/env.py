@@ -4,14 +4,9 @@ from alembic import context
 from sqlalchemy import create_engine, text
 
 from owl_mind.core.config import get_settings
-from owl_mind.services.models import Base
+from owl_mind.services.models import Base, sqlalchemy_url
 
 SCHEMA = "app"
-
-
-def sqlalchemy_url(database_url: str) -> str:
-    """Select the psycopg 3 driver, which is the only Postgres driver installed."""
-    return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
 
 def include_name(name, type_, parent_names):

@@ -36,4 +36,5 @@ def test_in_memory_store_keeps_values():
 
 
 def test_app_tables_are_in_the_app_schema():
-    assert set(Base.metadata.tables) == {"app.students", "app.threads", "app.runs"}
+    assert {"app.students", "app.threads", "app.runs"} <= set(Base.metadata.tables)
+    assert all(table.schema == "app" for table in Base.metadata.tables.values())
