@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, MAX_MESSAGE_CHARS, type HistoryMessage, type Thread, type User } from "../shared/api";
+import {
+  api,
+  ApiError,
+  MAX_MESSAGE_CHARS,
+  type Handoff,
+  type HistoryMessage,
+  type SimilarPost,
+  type Thread,
+  type User,
+} from "../shared/api";
+import { HandoffCard } from "./HandoffCard";
 import { Message } from "./Message";
 import { followRun } from "./runStream";
 
@@ -15,6 +25,9 @@ export function ChatPage({ user, onLoggedOut }: Props) {
   const [error, setError] = useState("");
   const [draft, setDraft] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [handoffs, setHandoffs] = useState<Handoff[]>([]);
+  // Similar posts arrive only with the live event, so they're kept per draft here.
+  const [similar, setSimilar] = useState<Record<string, SimilarPost[]>>({});
   // Set straight away, so a double click can't start two runs before React re-renders.
   const sending = useRef(false);
   const stopFollowing = useRef<(() => void) | null>(null);
@@ -43,8 +56,17 @@ export function ChatPage({ user, onLoggedOut }: Props) {
     }
   }, [messages, answer, progress, error]);
 
-  function follow(runId: string) {
+  // Handoff is optional on the server, so failing to list drafts is not an error to show.
+  const loadHandoffs = useCallback((threadId: string) => {
+    api
+      .handoffs(threadId)
+      .then(setHandoffs)
+      .catch(() => setHandoffs([]));
+  }, []);
+
+  function follow(runId: string, threadId: string) {
     let text = "";
+    let drafted = false;
     setAnswer("");
     setProgress("Thinking");
     setRunning(true);
@@ -54,6 +76,9 @@ export function ChatPage({ user, onLoggedOut }: Props) {
         setAnswer(text);
       } else if (update.kind === "progress") {
         setProgress(update.label);
+      } else if (update.kind === "handoff") {
+        drafted = true;
+        setSimilar((current) => ({ ...current, [update.id]: update.similar }));
       } else {
         if (text) {
           setMessages((current) => [...current, { role: "assistant", content: text }]);
@@ -64,6 +89,9 @@ export function ChatPage({ user, onLoggedOut }: Props) {
         sending.current = false;
         if (update.error) {
           setError(update.error);
+        }
+        if (drafted) {
+          loadHandoffs(threadId);
         }
       }
     });
@@ -82,10 +110,10 @@ export function ChatPage({ user, onLoggedOut }: Props) {
       if (selected === null) {
         const started = await api.startThread(message);
         setSelected(started.thread_id);
-        follow(started.run_id);
+        follow(started.run_id, started.thread_id);
         setThreads(await api.threads());
       } else {
-        follow((await api.sendMessage(selected, message)).run_id);
+        follow((await api.sendMessage(selected, message)).run_id, selected);
       }
     } catch (caught) {
       sending.current = false;
@@ -104,6 +132,8 @@ export function ChatPage({ user, onLoggedOut }: Props) {
     setError("");
     setSelected(threadId);
     setMessages([]);
+    setHandoffs([]);
+    loadHandoffs(threadId);
     try {
       setMessages(await api.history(threadId));
     } catch (caught) {
@@ -119,6 +149,7 @@ export function ChatPage({ user, onLoggedOut }: Props) {
     setError("");
     setSelected(null);
     setMessages([]);
+    setHandoffs([]);
     setDraft("");
   }
 
@@ -171,6 +202,19 @@ export function ChatPage({ user, onLoggedOut }: Props) {
           )}
           {messages.map((message, index) => (
             <Message key={index} role={message.role} content={message.content} />
+          ))}
+          {handoffs.map((handoff) => (
+            <HandoffCard
+              key={handoff.id}
+              handoff={handoff}
+              similar={similar[handoff.id] ?? []}
+              onFailure={handleFailure}
+              onChange={(changed) =>
+                setHandoffs((current) =>
+                  current.map((item) => (item.id === changed.id ? { ...item, ...changed } : item)),
+                )
+              }
+            />
           ))}
           {answer && <Message role="assistant" content={answer} />}
           {running && <p className="progress">{progress}...</p>}

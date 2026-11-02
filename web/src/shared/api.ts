@@ -6,11 +6,23 @@ export type User = { email: string; role: string };
 export type Thread = { id: string; title: string; created_at: string };
 export type HistoryMessage = { role: "user" | "assistant"; content: string };
 export type RunStarted = { thread_id: string; run_id: string };
+export type SimilarPost = { title: string; url: string };
+export type Handoff = {
+  id: string;
+  status: "draft" | "posting" | "posted" | "retrying" | "fallback" | "cancelled";
+  title: string;
+  body: string;
+  graded: boolean;
+  url: string | null;
+  forum_url: string | null;
+};
 
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    // The response body, for the few answers that carry data with an error status.
+    readonly data: unknown = null,
   ) {
     super(message);
   }
@@ -49,7 +61,7 @@ export async function request<T>(path: string, body?: unknown): Promise<T> {
   });
   if (!response.ok) {
     const data = await response.json().catch(() => null);
-    throw new ApiError(response.status, errorMessage(response.status, data));
+    throw new ApiError(response.status, errorMessage(response.status, data), data);
   }
   return response.status === 204 ? (undefined as T) : response.json();
 }
@@ -67,4 +79,9 @@ export const api = {
   startThread: (message: string) => request<RunStarted>("/threads", { message }),
   sendMessage: (threadId: string, message: string) =>
     request<RunStarted>(`/threads/${threadId}/messages`, { message }),
+  handoffs: (threadId: string) =>
+    request<Handoff[]>(`/handoffs?thread_id=${encodeURIComponent(threadId)}`),
+  approveHandoff: (id: string, title: string, body: string, graded: boolean) =>
+    request<Handoff>(`/handoffs/${id}/approve`, { title, body, graded }),
+  cancelHandoff: (id: string) => request<Handoff>(`/handoffs/${id}/cancel`, {}),
 };

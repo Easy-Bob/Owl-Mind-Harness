@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     ingest_timeout_seconds: int = 120
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_cache_dir: Path = Path.home() / ".cache" / "owl-mind" / "fastembed"
+    forum_repo: str = ""
+    forum_category: str = "Q&A"
+    forum_app_id: str | None = None
+    forum_app_private_key_path: Path | None = None
 
 
 @lru_cache

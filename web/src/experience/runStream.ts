@@ -1,9 +1,12 @@
+import type { SimilarPost } from "../shared/api";
+
 // Follows one run's server-sent events. If the connection drops, the browser reconnects by itself
 // and sends Last-Event-ID, so the server continues from the event after the last one received.
 
 export type RunUpdate =
   | { kind: "text"; text: string }
   | { kind: "progress"; label: string }
+  | { kind: "handoff"; id: string; similar: SimilarPost[] }
   | { kind: "finished"; status: string; error?: string };
 
 const PROGRESS_LABELS: Record<string, (data: { name?: string }) => string> = {
@@ -27,6 +30,10 @@ export function followRun(runId: string, onUpdate: (update: RunUpdate) => void):
       onUpdate({ kind: "progress", label: label(JSON.parse(event.data)) });
     });
   }
+  source.addEventListener("handoff_draft", (event) => {
+    const data = JSON.parse(event.data);
+    onUpdate({ kind: "handoff", id: data.id, similar: data.similar ?? [] });
+  });
   source.addEventListener("done", (event) => {
     finish({ kind: "finished", status: JSON.parse(event.data).status });
   });

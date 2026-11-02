@@ -374,3 +374,125 @@ describe("App", () => {
     expect(screen.queryByText(/admin/i)).toBeNull();
   });
 });
+
+describe("HandoffCard", () => {
+  const draft = {
+    id: "h1",
+    status: "draft",
+    title: "Help with BFS",
+    body: "**Question**\n\nWhy is my BFS wrong?",
+    graded: false,
+    url: null,
+    forum_url: "https://github.com/owner/forum/discussions",
+  };
+  const similar = [{ title: "Old BFS question", url: "https://github.com/owner/forum/2" }];
+
+  async function askForTutor(routes: Record<string, Reply | ((body: unknown) => Reply)>) {
+    const calls = fakeServer({
+      ...loggedIn,
+      "POST /threads": started,
+      "GET /handoffs?thread_id=t1": { body: [draft] },
+      ...routes,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.type(await screen.findByLabelText("Your message"), "talk to a TA{Enter}");
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    lastStream().emit("handoff_draft", { id: "h1", removed: {}, similar });
+    lastStream().emit("text_delta", { text: "I drafted a forum post." });
+    lastStream().emit("done", { status: "completed" });
+    await screen.findByRole("region", { name: "Forum post draft" });
+    return { calls, user };
+  }
+
+  it("shows the draft for editing, with similar posts and what posting means", async () => {
+    await askForTutor({});
+
+    expect(screen.getByLabelText("Title")).toHaveValue("Help with BFS");
+    expect(screen.getByLabelText("Post")).toHaveValue(draft.body);
+    expect(screen.getByRole("link", { name: "Old BFS question" })).toBeVisible();
+    expect(screen.getByText(/Nothing is posted until you approve/)).toBeVisible();
+    expect(screen.getByText(/stays on the forum/)).toBeVisible();
+  });
+
+  it("posts exactly the edited text once, then links to the post", async () => {
+    const posted = {
+      ...draft,
+      status: "posted",
+      url: "https://github.com/owner/forum/discussions/5",
+    };
+    const { calls, user } = await askForTutor({
+      "POST /handoffs/h1/approve": { body: { ...posted, title: "Edited title" } },
+    });
+
+    await user.clear(screen.getByLabelText("Title"));
+    await user.type(screen.getByLabelText("Title"), "Edited title");
+    await user.click(screen.getByLabelText(/graded assignment/));
+    await user.dblClick(screen.getByRole("button", { name: "Approve and post" }));
+
+    expect(await screen.findByRole("link", { name: "Edited title" })).toHaveAttribute(
+      "href",
+      posted.url,
+    );
+    const approvals = calls.filter((call) => call.key === "POST /handoffs/h1/approve");
+    expect(approvals).toEqual([
+      {
+        key: "POST /handoffs/h1/approve",
+        body: { title: "Edited title", body: draft.body, graded: true },
+      },
+    ]);
+  });
+
+  it("shows the redacted text when the server changed it, and asks again", async () => {
+    const revised = { ...draft, body: "my password = [secret removed]" };
+    const { user } = await askForTutor({
+      "POST /handoffs/h1/approve": { status: 409, body: revised },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Approve and post" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("approve again");
+    expect(screen.getByLabelText("Post")).toHaveValue(revised.body);
+  });
+
+  it("gives copyable text and the forum link when posting failed", async () => {
+    const { user } = await askForTutor({
+      "POST /handoffs/h1/approve": { body: { ...draft, status: "fallback" } },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Approve and post" }));
+
+    expect(await screen.findByLabelText("Post to copy")).toHaveValue(
+      `${draft.title}\n\n${draft.body}`,
+    );
+    expect(screen.getByRole("link", { name: "the forum" })).toHaveAttribute(
+      "href",
+      draft.forum_url,
+    );
+  });
+
+  it("removes the card when cancelled", async () => {
+    const { user } = await askForTutor({
+      "POST /handoffs/h1/cancel": { body: { ...draft, status: "cancelled" } },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Forum post draft" })).toBeNull(),
+    );
+  });
+
+  it("shows a refusal on the card", async () => {
+    const { user } = await askForTutor({
+      "POST /handoffs/h1/approve": {
+        status: 400,
+        body: { detail: "You can post once every 10 minutes. Try again shortly." },
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Approve and post" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("10 minutes");
+  });
+});
