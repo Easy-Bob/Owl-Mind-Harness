@@ -239,6 +239,20 @@ def check_login_required(anonymous_client, public_paths: set[str]) -> list[Viola
     ]
 
 
+def check_no_model_calls(model_requests: list, route: str) -> list[Violation]:
+    """A rule-settled message makes no model call at all."""
+    if not model_requests:
+        return []
+    return [Violation("no-model", route, 0, f"made {len(model_requests)} model calls")]
+
+
+def check_access_logged(rows_before: int, rows_after: int) -> list[Violation]:
+    """Opening one user's detail writes exactly one access log row."""
+    if rows_after == rows_before + 1:
+        return []
+    return [Violation("access-log", "<test run>", 0, f"{rows_after - rows_before} rows written")]
+
+
 def check_every_call_recorded(model_calls: int, recorded: int) -> list[Violation]:
     """Every model call in a test run produces exactly one telemetry record."""
     if model_calls == recorded:

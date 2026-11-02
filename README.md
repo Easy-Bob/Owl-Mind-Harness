@@ -65,6 +65,10 @@ uv run uvicorn owl_mind.api.app:app --host 0.0.0.0 --port 8010
 
 The first is the consumer that writes the rows. The second serves `/metrics`, which Prometheus scrapes. Port 8010 is open to your network while it runs. Grafana is at http://localhost:3002 (user `admin`, password `owl_dev`).
 
+### Admin mode
+
+Sign in with an email listed in `CONFIGURED_ADMINS`, then click **Admin**. It shows requests and model calls, with no message text. Model call rows need the telemetry consumer running.
+
 ### Live model test
 
 This test calls DeepSeek and costs a small amount, so it runs only on request and never in CI. Set `DEEPSEEK_API_KEY` in `.env`, then run:

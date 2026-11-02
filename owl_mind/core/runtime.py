@@ -23,6 +23,7 @@ from owl_mind.core.model import get_chat_model
 from owl_mind.core.prompts import PROMPT_VERSION
 from owl_mind.core.streaming import STREAM_MODES, StreamTranslator
 from owl_mind.services.accounts import AccountStore, LoginLimiter
+from owl_mind.services.admin_store import AdminStore
 from owl_mind.services.run_store import RunStore
 from owl_mind.services.study_store import StudyStore
 from owl_mind.tools.context import RunContext
@@ -49,6 +50,7 @@ RUN_LIMITS: dict[TaskKind, RunLimit] = {
 
 @dataclass(frozen=True)
 class Services:
+    admin: AdminStore
     accounts: AccountStore
     limiter: LoginLimiter
     runs: RunStore
@@ -134,12 +136,19 @@ async def _record_turn(
     )
 
 
+def _kind(result: IntentResult) -> str | None:
+    return result.task_kind.value if result.task_kind else None
+
+
 async def _fixed_reply(services: Services, request: RunRequest, result: IntentResult) -> str:
     if result.route is Route.HANDOFF:
         text = replies.HANDOFF_UNAVAILABLE
     elif result.reply is Reply.DUE_TOPICS:
         today = datetime.now(UTC).date()
         text = replies.due_topics(await services.study.due_topics(request.student_id, today))
+    elif result.reply is Reply.PROGRESS:
+        counts = await services.study.review_counts(request.student_id, datetime.now(UTC).date())
+        text = replies.progress(*counts)
     else:
         text = replies.TEXT[result.reply]
     return text + (replies.left_out_note(result.left_out) if result.left_out else "")
@@ -205,6 +214,7 @@ async def execute_run(services: Services, request: RunRequest) -> None:
     try:
         await services.runs.set_run_status(request.run_id, "running")
         result = await services.intent.classify(request.message, config=config)
+        await services.runs.set_run_setup(request.run_id, result.route.value, _kind(result))
         if result.route is Route.ORCHESTRATED:
             try:
                 await _run_agent(services, request, result, config, emit)

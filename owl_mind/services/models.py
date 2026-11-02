@@ -63,6 +63,8 @@ class Run(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     thread_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("threads.id"), index=True)
     status: Mapped[str] = mapped_column(String(20))
+    route: Mapped[str | None] = mapped_column(String(20))
+    task_kind: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

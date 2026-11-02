@@ -149,14 +149,16 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     settings = get_settings()
     client = redis.Redis.from_url(settings.redis_url)
-    with psycopg.connect(settings.database_url) as db:
-        while True:
-            try:
-                ensure_group(client)
-                process_once(client, db, block_ms=5000)
-            except redis.RedisError as exc:
-                logger.warning("Redis unavailable, retrying: %s", type(exc).__name__)
-                time.sleep(1)
+    while True:
+        # Unacknowledged events are read again, so reconnecting loses nothing.
+        try:
+            with psycopg.connect(settings.database_url) as db:
+                while True:
+                    ensure_group(client)
+                    process_once(client, db, block_ms=5000)
+        except (redis.RedisError, psycopg.OperationalError) as exc:
+            logger.warning("Service unavailable, retrying: %s", type(exc).__name__)
+            time.sleep(1)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Threads, runs and run events in the app schema. Student-facing reads filter by owner."""
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
@@ -32,6 +32,8 @@ class RunInfo:
     id: uuid.UUID
     thread_id: uuid.UUID
     status: str
+    route: str | None = None
+    task_kind: str | None = None
 
 
 @runtime_checkable
@@ -50,6 +52,8 @@ class RunStore(Protocol):
         """Return None if the run is not this student's."""
 
     async def set_run_status(self, run_id: uuid.UUID, status: str) -> None: ...
+
+    async def set_run_setup(self, run_id: uuid.UUID, route: str, task_kind: str | None) -> None: ...
 
     async def fail_unfinished_runs(self) -> int: ...
 
@@ -94,8 +98,10 @@ class InMemoryRunStore:
         return run
 
     async def set_run_status(self, run_id: uuid.UUID, status: str) -> None:
-        run = self.runs[run_id]
-        self.runs[run_id] = RunInfo(run.id, run.thread_id, status)
+        self.runs[run_id] = replace(self.runs[run_id], status=status)
+
+    async def set_run_setup(self, run_id: uuid.UUID, route: str, task_kind: str | None) -> None:
+        self.runs[run_id] = replace(self.runs[run_id], route=route, task_kind=task_kind)
 
     async def fail_unfinished_runs(self) -> int:
         unfinished = [r.id for r in self.runs.values() if r.status in UNFINISHED]
@@ -156,11 +162,18 @@ class PostgresRunStore:
         )
         async with self._sessions() as session:
             row = await session.scalar(statement)
-        return None if row is None else RunInfo(row.id, row.thread_id, row.status)
+        if row is None:
+            return None
+        return RunInfo(row.id, row.thread_id, row.status, row.route, row.task_kind)
 
     async def set_run_status(self, run_id: uuid.UUID, status: str) -> None:
         async with self._sessions.begin() as session:
             await session.execute(update(Run).where(Run.id == run_id).values(status=status))
+
+    async def set_run_setup(self, run_id: uuid.UUID, route: str, task_kind: str | None) -> None:
+        values = {"route": route, "task_kind": task_kind}
+        async with self._sessions.begin() as session:
+            await session.execute(update(Run).where(Run.id == run_id).values(**values))
 
     async def fail_unfinished_runs(self) -> int:
         statement = update(Run).where(Run.status.in_(UNFINISHED)).values(status="failed")

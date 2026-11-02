@@ -36,6 +36,25 @@ def intent(**confidences: float) -> dict:
     return say(json.dumps({"intents": items}))
 
 
+class FakeAdminStore:
+    """Holds canned pages and records detail views. SQL is tested against real Postgres."""
+
+    def __init__(self) -> None:
+        self.views: list[tuple[uuid.UUID, uuid.UUID]] = []
+        self.detail: dict | None = None
+
+    async def list_requests(self, query: str, page: int, size: int) -> dict:
+        return {"items": [], "total": 0, "page": page, "size": size, "query": query}
+
+    async def get_request(self, run_id: uuid.UUID, viewer_id: uuid.UUID) -> dict | None:
+        if self.detail is not None:
+            self.views.append((viewer_id, run_id))
+        return self.detail
+
+    async def model_call_summary(self, days: int) -> dict:
+        return {"days": days}
+
+
 class World:
     """An app with in-memory services, a scripted model and a chosen logged-in student."""
 
@@ -54,7 +73,9 @@ class World:
 
         self.accounts = InMemoryAccountStore()
         self.limiter = InMemoryLoginLimiter()
+        self.admin = FakeAdminStore()
         self.services = Services(
+            admin=self.admin,
             accounts=self.accounts,
             limiter=self.limiter,
             runs=self.runs,
@@ -259,7 +280,7 @@ def test_agent_turn_has_real_tool_access_to_the_student_records():
     [
         ("hi", replies.TEXT[runtime.Reply.GREETING]),
         ("thanks", replies.TEXT[runtime.Reply.THANKS]),
-        ("show my progress", replies.TEXT[runtime.Reply.PROGRESS]),
+        ("show my progress", replies.progress(0, 0)),
         ("I want to talk to a TA", replies.HANDOFF_UNAVAILABLE),
     ],
 )

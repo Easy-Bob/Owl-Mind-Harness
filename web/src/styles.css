@@ -274,6 +274,153 @@ textarea:focus-visible {
   color: var(--muted);
 }
 
+/* Admin mode */
+
+.with-mode-switch {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.mode-switch {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.mode-switch button,
+.admin-nav button,
+.admin-search button,
+.pager button,
+.admin-main td button {
+  padding: 4px 12px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mode-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.admin {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  height: 100%;
+}
+
+.admin-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+}
+
+.admin-nav button {
+  text-align: left;
+}
+
+.admin-nav button[aria-current="page"] {
+  background: var(--user);
+}
+
+.admin-main {
+  min-width: 0;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.admin-main h2 {
+  margin-top: 0;
+}
+
+.admin-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.admin-search input {
+  min-width: 0;
+  padding: 4px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.admin-note {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th,
+td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+  font-size: 14px;
+}
+
+.pager button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.timeline {
+  padding-left: 24px;
+  overflow-wrap: anywhere;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
 @media (max-width: 700px) {
   .chat {
     grid-template-columns: minmax(0, 1fr);
@@ -302,5 +449,16 @@ textarea:focus-visible {
 
   .sessions-open + .conversation {
     display: none;
+  }
+
+  .admin {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .admin-nav {
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
   }
 }

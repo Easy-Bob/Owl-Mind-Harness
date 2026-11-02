@@ -43,6 +43,9 @@ class StudyStore(Protocol):
 
     async def due_topics(self, student_id: uuid.UUID, today: date) -> list[str]: ...
 
+    async def review_counts(self, student_id: uuid.UUID, today: date) -> tuple[int, int]:
+        """Return how many topics are scheduled, and how many of those are due."""
+
     async def save_spec(self, student_id: uuid.UUID, spec: dict[str, Any]) -> uuid.UUID: ...
 
     async def pin_rubric(
@@ -95,6 +98,10 @@ class InMemoryStudyStore:
             if owner == student_id and state.due_date <= today
         ]
         return [topic for _, topic in sorted(due)]
+
+    async def review_counts(self, student_id: uuid.UUID, today: date) -> tuple[int, int]:
+        owned = [s for (owner, _), s in self.reviews.items() if owner == student_id]
+        return len(owned), sum(state.due_date <= today for state in owned)
 
     async def save_spec(self, student_id: uuid.UUID, spec: dict[str, Any]) -> uuid.UUID:
         spec_id = uuid.uuid4()
@@ -173,6 +180,12 @@ class PostgresStudyStore:
         )
         async with self._sessions() as session:
             return list((await session.scalars(statement)).all())
+
+    async def review_counts(self, student_id: uuid.UUID, today: date) -> tuple[int, int]:
+        statement = select(ReviewSchedule.due_date).where(ReviewSchedule.student_id == student_id)
+        async with self._sessions() as session:
+            dates = (await session.scalars(statement)).all()
+        return len(dates), sum(due <= today for due in dates)
 
     async def save_spec(self, student_id: uuid.UUID, spec: dict[str, Any]) -> uuid.UUID:
         row = QuizSpec(id=uuid.uuid4(), student_id=student_id, spec=spec)
