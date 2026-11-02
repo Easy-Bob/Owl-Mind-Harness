@@ -23,6 +23,7 @@ from owl_mind.core.intent.taxonomy import TaskKind
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.runtime import RUN_LIMITS, RunLimit, RunRequest, Services, execute_run
 from owl_mind.core.streaming import FLUSH_CHARS, StreamTranslator
+from owl_mind.services.accounts import InMemoryAccountStore, InMemoryLoginLimiter
 from owl_mind.services.run_store import InMemoryRunStore
 from owl_mind.services.study_store import InMemoryStudyStore, ReviewState
 from tests.fake_deepseek import FakeDeepSeek
@@ -51,7 +52,11 @@ class World:
             self.fake.attach(model)
             return model
 
+        self.accounts = InMemoryAccountStore()
+        self.limiter = InMemoryLoginLimiter()
         self.services = Services(
+            accounts=self.accounts,
+            limiter=self.limiter,
             runs=self.runs,
             study=self.study,
             events=self.bus,

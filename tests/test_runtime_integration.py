@@ -29,6 +29,7 @@ from owl_mind.core.intent.classifier import IntentStep
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.persistence import open_persistence
 from owl_mind.core.runtime import Services
+from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
 from owl_mind.services.models import sqlalchemy_url
 from owl_mind.services.run_store import ActiveRunExists, InMemoryRunStore, PostgresRunStore
 from owl_mind.services.study_store import PostgresStudyStore
@@ -268,6 +269,8 @@ class RealWorld:
             client = Redis.from_url(settings.redis_url, socket_timeout=15)
             async with open_persistence(settings.database_url) as persistence:
                 yield Services(
+                    accounts=PostgresAccountStore(sessions),
+                    limiter=RedisLoginLimiter(client),
                     runs=PostgresRunStore(sessions),
                     study=PostgresStudyStore(sessions),
                     events=RedisEventBus(client),

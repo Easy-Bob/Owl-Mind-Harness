@@ -1,6 +1,7 @@
 """Project rules, checked on the syntax tree so that comments and prose do not trip them."""
 
 import ast
+import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -207,6 +208,35 @@ def check_activity_event_types(types) -> list[Violation]:
     if not extra:
         return []
     return [Violation("activity-types", "<config>", 0, f"unexpected: {sorted(extra)}")]
+
+
+def _schema_routes(client) -> list[tuple[str, str]]:
+    """Every route in the public API schema, with a real-looking id in each path parameter."""
+    routes = []
+    for path, methods in client.get("/openapi.json").json()["paths"].items():
+        concrete = re.sub(r"{[^}]+}", "00000000-0000-0000-0000-000000000000", path)
+        routes += [(method.upper(), concrete) for method in methods]
+    return routes
+
+
+def check_admin_routes(student_client) -> list[Violation]:
+    """Call every route under /admin as a logged-in student. Each must answer 403."""
+    return [
+        Violation("admin-only", path, 0, f"{method} answered {status} to a student")
+        for method, path in _schema_routes(student_client)
+        if path.startswith("/admin")
+        and (status := student_client.request(method, path).status_code) != 403
+    ]
+
+
+def check_login_required(anonymous_client, public_paths: set[str]) -> list[Violation]:
+    """Call every route with no login. Each must answer 401, unless it is on the public list."""
+    return [
+        Violation("login-required", path, 0, f"{method} answered {status} with no login")
+        for method, path in _schema_routes(anonymous_client)
+        if path not in public_paths
+        and (status := anonymous_client.request(method, path).status_code) != 401
+    ]
 
 
 def check_every_call_recorded(model_calls: int, recorded: int) -> list[Violation]:

@@ -27,6 +27,8 @@ uv run alembic upgrade head
 uv run pytest -m integration
 ```
 
+The app itself also needs `JWT_SECRET` in `.env`. Accounts need `INVITE_CODES`, and `CONFIGURED_ADMINS` names the admins.
+
 The integration tests flush Redis and restart the containers, and they refuse to run against any other address. Don't point them at data you want to keep.
 
 `docker compose down -v` deletes all local data. Use `docker compose down` to keep it.
