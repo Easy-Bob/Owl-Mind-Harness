@@ -1,0 +1,306 @@
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --panel: #f5f5f4;
+  --text: #1c1917;
+  --muted: #57534e;
+  --border: #d6d3d1;
+  --accent: #1d4ed8;
+  --accent-text: #ffffff;
+  --user: #e7e5e4;
+  --error: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1917;
+    --panel: #292524;
+    --text: #f5f5f4;
+    --muted: #a8a29e;
+    --border: #44403c;
+    --accent: #93c5fd;
+    --accent-text: #1c1917;
+    --user: #44403c;
+    --error: #fca5a5;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, sans-serif;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.error {
+  color: var(--error);
+}
+
+/* Login and signup */
+
+.auth {
+  max-width: 400px;
+  margin: 0 auto;
+  padding: 48px 16px;
+}
+
+.auth form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.auth input:not([type="checkbox"]) {
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.auth button[type="submit"],
+.composer button {
+  padding: 8px 16px;
+  background: var(--accent);
+  color: var(--accent-text);
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.auth button:disabled,
+.composer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.notice {
+  padding: 8px;
+  background: var(--panel);
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.check {
+  display: flex;
+  gap: 8px;
+}
+
+.link {
+  margin-top: 16px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Chat */
+
+.chat {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  height: 100%;
+}
+
+.menu-button {
+  display: none;
+}
+
+.sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 16px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+}
+
+.sessions ul {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.sessions li button,
+.new-chat,
+.account button {
+  width: 100%;
+  padding: 8px;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sessions li button {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sessions li button[aria-current="true"] {
+  background: var(--user);
+}
+
+.new-chat {
+  border: 1px solid var(--border);
+}
+
+.sessions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.account {
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.conversation {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.messages {
+  flex: 1;
+  min-height: 0;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.message {
+  max-width: 760px;
+  margin: 0 auto 16px;
+  overflow-wrap: anywhere;
+}
+
+.message p {
+  margin: 0 0 8px;
+}
+
+.message p:last-child {
+  margin-bottom: 0;
+}
+
+.message pre {
+  overflow-x: auto;
+  padding: 8px;
+  background: var(--panel);
+  border-radius: 6px;
+}
+
+.message-user {
+  padding: 8px 16px;
+  background: var(--user);
+  border-radius: 8px;
+  white-space: pre-wrap;
+}
+
+.empty,
+.progress,
+.messages .error {
+  max-width: 760px;
+  margin: 0 auto 16px;
+}
+
+.empty,
+.progress {
+  color: var(--muted);
+}
+
+.composer {
+  width: 100%;
+  max-width: 792px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.composer label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.composer textarea {
+  width: 100%;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  resize: vertical;
+}
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+@media (max-width: 700px) {
+  .chat {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .menu-button {
+    display: block;
+    padding: 8px 16px;
+    background: var(--panel);
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .sessions {
+    display: none;
+    grid-row: 2;
+    border-right: 0;
+  }
+
+  .sessions-open {
+    display: flex;
+  }
+
+  .sessions-open + .conversation {
+    display: none;
+  }
+}

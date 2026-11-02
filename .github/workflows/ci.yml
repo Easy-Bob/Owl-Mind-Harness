@@ -33,3 +33,36 @@ jobs:
       - run: uv sync --locked
       - run: docker compose up -d --wait
       - run: uv run pytest -m integration
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: web/.nvmrc
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: web/.nvmrc
+      - run: uv sync --locked
+      - run: docker compose up -d --wait postgres redis
+      - run: npm ci
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run e2e
+        working-directory: web

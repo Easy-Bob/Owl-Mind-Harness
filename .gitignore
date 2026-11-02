@@ -32,3 +32,8 @@ CLAUDE.md
 
 # # DB
 # .sql
+
+# Web
+web/dist/
+web/test-results/
+web/playwright-report/

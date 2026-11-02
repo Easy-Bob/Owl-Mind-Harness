@@ -33,6 +33,27 @@ The integration tests flush Redis and restart the containers, and they refuse to
 
 `docker compose down -v` deletes all local data. Use `docker compose down` to keep it.
 
+### Web app
+
+You need Node (see `web/.nvmrc`). With the services running and `.env` set up, run these in two terminals:
+
+```bash
+uv run uvicorn owl_mind.api.app:app --port 8010
+cd web && npm ci && npm run dev
+```
+
+Then open the address Vite prints. Set `COOKIE_SECURE=false` in `.env`, or login cookies won't work over plain HTTP. Checks:
+
+```bash
+cd web
+npm run build
+npm test
+npx playwright install chromium
+npm run e2e
+```
+
+`npm run e2e` drives a real browser against the real API, Postgres and Redis with a scripted model, so it costs nothing. It restarts the Postgres and Redis containers, and needs ports 8012, 4173 and 4174 free.
+
 ### Telemetry
 
 Every model call is recorded in `ops.model_calls`, with metadata only and no message text. To run the parts that are not in Docker:
