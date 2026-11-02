@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     redis_url: str
     deepseek_api_key: SecretStr | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
+    intent_layer3_enabled: bool = False
 
 
 @lru_cache
