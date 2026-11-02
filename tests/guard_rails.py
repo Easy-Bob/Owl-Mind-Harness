@@ -5,11 +5,14 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from owl_mind.core.telemetry import TokenAccounting
+
 PRODUCT_DIRS = ("owl_mind", "migrations")
 SKIPPED_DIRS = {".git", ".venv", "__pycache__", "build", "dist", "node_modules"}
 
 MODEL_MODULE = "owl_mind/core/model.py"
 CONFIG_MODULE = "owl_mind/core/config.py"
+FACTORY_MODULE = "owl_mind/core/factory.py"
 
 PROVIDER_MODULES = {
     "anthropic",
@@ -90,8 +93,8 @@ def check_model_construction(root: Path) -> list[Violation]:
 
 def _sampling_param(node: ast.AST) -> str | None:
     match node:
-        case ast.keyword(arg=name) | ast.Name(id=name) | ast.Attribute(attr=name) | ast.arg(
-            arg=name
+        case (
+            ast.keyword(arg=name) | ast.Name(id=name) | ast.Attribute(attr=name) | ast.arg(arg=name)
         ):
             pass
         case ast.Constant(value=str() as name):
@@ -161,6 +164,43 @@ def check_ascii_source(root: Path) -> list[Violation]:
     return found
 
 
+def check_agent_construction(root: Path) -> list[Violation]:
+    """Agents are built only in core/factory.py."""
+    rule = "agent-factory"
+    found = []
+    for path, tree, error in _product_trees(root, rule):
+        if error:
+            found.append(error)
+        elif path != FACTORY_MODULE:
+            for node in ast.walk(tree):
+                match node:
+                    case ast.Name(id="create_deep_agent") | ast.Attribute(attr="create_deep_agent"):
+                        found.append(Violation(rule, path, node.lineno, "uses create_deep_agent"))
+                    case ast.ImportFrom(names=names) if any(
+                        alias.name == "create_deep_agent" for alias in names
+                    ):
+                        found.append(Violation(rule, path, node.lineno, "imports it"))
+    return found
+
+
+def check_models_from_door(models: list) -> list[Violation]:
+    """Every model given to an agent has token accounting, which only core/model.py attaches."""
+    return [
+        Violation("model-from-door", "<test run>", 0, f"{type(model).__name__} has no accounting")
+        for model in models
+        if not any(isinstance(callback, TokenAccounting) for callback in model.callbacks or [])
+    ]
+
+
+def check_tool_scopes(declared: dict, built: dict) -> list[Violation]:
+    """Each subagent's declared tool scope equals the tools it is built with."""
+    return [
+        Violation("tool-scope", str(name), 0, f"declared {declared.get(name)}, built {tools}")
+        for name, tools in built.items()
+        if list(declared.get(name, ())) != list(tools)
+    ]
+
+
 def check_every_call_recorded(model_calls: int, recorded: int) -> list[Violation]:
     """Every model call in a test run produces exactly one telemetry record."""
     if model_calls == recorded:
@@ -185,4 +225,5 @@ ALL_CHECKS = (
     check_env_access,
     check_no_top_level_mcp,
     check_ascii_source,
+    check_agent_construction,
 )

@@ -36,6 +36,8 @@ def small_model():
 
 
 def test_tool_loop_completes_with_no_reasoning_tokens(small_model):
+    if not get_settings().live_agent_runs_enabled:
+        pytest.skip("No live agent runs until M3-E delivers token budgets")
     agent = create_deep_agent(
         model=small_model,
         tools=[lookup_code],

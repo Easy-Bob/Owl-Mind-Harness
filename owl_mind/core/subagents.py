@@ -1,0 +1,56 @@
+"""Each tutor's prompt, tools and spending limit. Tool order is fixed to keep prompts cacheable."""
+
+from dataclasses import dataclass
+
+from langchain_core.tools import BaseTool
+
+from owl_mind.core import prompts
+from owl_mind.core.intent.taxonomy import Subagent
+from owl_mind.tools.concept import get_prerequisites
+from owl_mind.tools.planner import get_due_topics, propose_study_plan, schedule_review
+from owl_mind.tools.practice import analyze_complexity, build_hint
+from owl_mind.tools.quiz import generate_quiz_spec, grade_answer, pin_rubric
+
+
+@dataclass(frozen=True)
+class TutorSpec:
+    description: str
+    system_prompt: str
+    tools: tuple[BaseTool, ...]
+    max_tokens: int
+
+
+# The scopes on their own, so a guard rail can compare them with what each tutor is built with.
+TOOL_SCOPES: dict[Subagent, tuple[str, ...]] = {
+    Subagent.CONCEPT_TUTOR: ("get_prerequisites",),
+    Subagent.PRACTICE_COACH: ("build_hint", "analyze_complexity"),
+    Subagent.STUDY_PLANNER: ("schedule_review", "get_due_topics", "propose_study_plan"),
+    Subagent.QUIZ_MASTER: ("generate_quiz_spec", "pin_rubric", "grade_answer"),
+}
+
+TUTORS: dict[Subagent, TutorSpec] = {
+    Subagent.CONCEPT_TUTOR: TutorSpec(
+        "Explains computer-science concepts.",
+        prompts.CONCEPT_TUTOR,
+        (get_prerequisites,),
+        1200,
+    ),
+    Subagent.PRACTICE_COACH: TutorSpec(
+        "Guides a student through a problem with hints, without giving solutions.",
+        prompts.PRACTICE_COACH,
+        (build_hint, analyze_complexity),
+        1000,
+    ),
+    Subagent.STUDY_PLANNER: TutorSpec(
+        "Builds study plans and schedules reviews.",
+        prompts.STUDY_PLANNER,
+        (schedule_review, get_due_topics, propose_study_plan),
+        800,
+    ),
+    Subagent.QUIZ_MASTER: TutorSpec(
+        "Writes quizzes and grades answers against pinned rubrics.",
+        prompts.QUIZ_MASTER,
+        (generate_quiz_spec, pin_rubric, grade_answer),
+        1200,
+    ),
+}
