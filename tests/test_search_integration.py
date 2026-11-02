@@ -5,6 +5,7 @@ unique words, so the course materials in a local database can't decide the outco
 """
 
 import asyncio
+import functools
 import subprocess
 import sys
 import uuid
@@ -53,7 +54,10 @@ class CountingEmbedder:
         return self.real.embed(texts)
 
 
-EMBEDDER = CountingEmbedder()
+@functools.cache
+def embedder() -> CountingEmbedder:
+    """Created on first use, so importing this file needs no settings or model."""
+    return CountingEmbedder()
 
 
 def scenario(body):
@@ -61,7 +65,7 @@ def scenario(body):
         engine = create_async_engine(sqlalchemy_url(get_settings().database_url))
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         store = PostgresMaterialsStore(sessions)
-        search = MaterialsSearch(sessions, store, EMBEDDER, InMemorySearchCache())
+        search = MaterialsSearch(sessions, store, embedder(), InMemorySearchCache())
         try:
             return await body(store, search)
         finally:
@@ -73,7 +77,13 @@ def scenario(body):
 async def add(store, *texts: str, title: str = "Test notes") -> list[str]:
     chunks = [Chunk(i, f"page {i + 1}", title, text) for i, text in enumerate(texts)]
     document = await store.save_document(
-        title, ".md", uuid.uuid4().hex * 2, None, UPLOADER, chunks, EMBEDDER.real.embed(list(texts))
+        title,
+        ".md",
+        uuid.uuid4().hex * 2,
+        None,
+        UPLOADER,
+        chunks,
+        embedder().real.embed(list(texts)),
     )
     return [document]
 
@@ -121,9 +131,9 @@ def test_a_repeated_query_is_answered_from_the_cache_without_embedding():
     async def body(store, search):
         await add(store, f"Cuckoo hashing moves items between two tables {marker}.")
         first = await search.search(f"cuckoo {marker}")
-        calls = EMBEDDER.calls
+        calls = embedder().calls
         second = await search.search(f"  Cuckoo   {marker} ")
-        return first, second, EMBEDDER.calls - calls
+        return first, second, embedder().calls - calls
 
     first, second, extra_calls = scenario(body)
     assert first == second
@@ -136,10 +146,10 @@ def test_a_new_import_misses_the_cache():
     async def body(store, search):
         await add(store, f"Linear counting estimates distinct items {marker}.")
         await search.search(f"linear counting {marker}")
-        calls = EMBEDDER.calls
+        calls = embedder().calls
         await add(store, f"Another note about linear counting {marker}.")
         after = await search.search(f"linear counting {marker}", limit=MAX_RESULTS)
-        return EMBEDDER.calls - calls, after
+        return embedder().calls - calls, after
 
     extra_calls, after = scenario(body)
     assert extra_calls == 1
@@ -175,8 +185,8 @@ def test_one_document_cannot_crowd_out_the_rest():
 
 def test_a_blank_query_returns_nothing_and_embeds_nothing():
     async def body(store, search):
-        calls = EMBEDDER.calls
-        return await search.search("   "), EMBEDDER.calls - calls
+        calls = embedder().calls
+        return await search.search("   "), embedder().calls - calls
 
     assert scenario(body) == ([], 0)
 
