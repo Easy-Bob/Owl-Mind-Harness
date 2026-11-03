@@ -18,7 +18,9 @@ from owl_mind.core import replies, telemetry
 from owl_mind.core.events import EventBus
 from owl_mind.core.factory import LiveAgentRunsDisabled, build_owl_agent
 from owl_mind.core.intent.classifier import IntentResult, IntentStep
-from owl_mind.core.intent.taxonomy import Reply, Route, TaskKind
+from owl_mind.core.intent.followup import needs_earlier, previous_chat
+from owl_mind.core.intent.taxonomy import Reply, Route
+from owl_mind.core.limits import RUN_LIMITS, RunLimit  # noqa: F401  RunLimit is imported from here.
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.prompts import PROMPT_VERSION
 from owl_mind.core.streaming import STREAM_MODES, StreamTranslator
@@ -30,23 +32,6 @@ from owl_mind.services.study_store import StudyStore
 from owl_mind.tools.context import RunContext
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class RunLimit:
-    tool_calls: int
-    seconds: int
-
-
-# Starting values, to be tuned from eval traces.
-RUN_LIMITS: dict[TaskKind, RunLimit] = {
-    TaskKind.LEARN: RunLimit(20, 120),
-    TaskKind.PRACTICE: RunLimit(20, 120),
-    TaskKind.PLAN: RunLimit(15, 90),
-    TaskKind.ASSESS: RunLimit(30, 180),
-    TaskKind.COMPOSITE: RunLimit(35, 200),
-    TaskKind.SUPPORT: RunLimit(5, 30),
-}
 
 
 @dataclass(frozen=True)
@@ -170,6 +155,13 @@ async def _draft_handoff(services: Services, request: RunRequest, emit: _Emitter
     return replies.HANDOFF_DRAFTED
 
 
+async def _earlier_for(services: Services, request: RunRequest) -> tuple[str, str] | None:
+    """The previous chat, only for a follow-up message with nothing of its own to go on."""
+    if not needs_earlier(request.message):
+        return None
+    return previous_chat(await read_history(services.checkpointer, request.thread_id))
+
+
 def _kind(result: IntentResult) -> str | None:
     return result.task_kind.value if result.task_kind else None
 
@@ -256,7 +248,9 @@ async def execute_run(services: Services, request: RunRequest) -> None:
     }
     try:
         await services.runs.set_run_status(request.run_id, "running")
-        result = await services.intent.classify(request.message, config=config)
+        result = await services.intent.classify(
+            request.message, config=config, earlier=await _earlier_for(services, request)
+        )
         await services.runs.set_run_setup(request.run_id, result.route.value, _kind(result))
         if result.route is Route.ORCHESTRATED:
             try:

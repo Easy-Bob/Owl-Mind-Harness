@@ -236,6 +236,29 @@ def check_handoff_model_calls(root: Path) -> list[Violation]:
     return found
 
 
+REQUIRED_CHECKS = ("ToolErrorMiddleware", "ToolArgumentMiddleware", "ContextMiddleware")
+
+
+def check_agent_middleware(built: dict) -> list[Violation]:
+    """Every agent the factory builds has the M3-A checks, and the orchestrator caps fan-out.
+
+    built is what the factory passed to create_deep_agent.
+    """
+    found = []
+    agents = [("orchestrator", built.get("middleware", []), True)] + [
+        (spec["name"], spec.get("middleware", []), False) for spec in built.get("subagents", [])
+    ]
+    for name, middleware, is_orchestrator in agents:
+        present = [type(m).__name__ for m in middleware]
+        required = [*REQUIRED_CHECKS, *(["FanOutMiddleware"] if is_orchestrator else [])]
+        for check in required:
+            if check not in present:
+                found.append(Violation("agent-middleware", name, 0, f"missing {check}"))
+        if present[:1] != ["ToolErrorMiddleware"]:
+            found.append(Violation("agent-middleware", name, 0, "tool errors aren't outermost"))
+    return found
+
+
 def check_models_from_door(models: list) -> list[Violation]:
     """Every model given to an agent has token accounting, which only core/model.py attaches."""
     return [

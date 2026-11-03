@@ -18,6 +18,8 @@ from owl_mind.backends.permissions import ORCHESTRATOR_PERMISSIONS, TUTOR_PERMIS
 from owl_mind.core import prompts
 from owl_mind.core.config import get_settings
 from owl_mind.core.intent.taxonomy import Subagent, TaskKind
+from owl_mind.core.limits import RUN_LIMITS
+from owl_mind.core.middleware import turn_middleware
 from owl_mind.core.model import ModelTier, get_chat_model
 from owl_mind.core.subagents import TUTORS
 from owl_mind.tools.context import RunContext
@@ -55,6 +57,13 @@ def build_owl_agent(
     if not get_settings().live_agent_runs_enabled:
         raise LiveAgentRunsDisabled("No live agent runs until M3-E delivers token budgets")
 
+    limit = RUN_LIMITS[task_kind]
+
+    def checks(orchestrator: bool):
+        return turn_middleware(
+            task_kind, subagents, limit.tool_calls, limit.seconds, orchestrator=orchestrator
+        )
+
     specs = [
         {
             "name": subagent.value,
@@ -63,6 +72,7 @@ def build_owl_agent(
             "tools": list(TUTORS[subagent].tools),
             "permissions": TUTOR_PERMISSIONS[subagent],
             "skills": SKILL_SOURCES,
+            "middleware": checks(orchestrator=False),
             "model": get_model(
                 ModelTier.SMALL,
                 component=f"agent:{subagent.value}",
@@ -82,7 +92,7 @@ def build_owl_agent(
         tools=[get_due_topics],
         system_prompt=prompts.ORCHESTRATOR,
         subagents=specs,
-        middleware=[TodoListMiddleware()] if is_composite else [],
+        middleware=[*checks(orchestrator=True), *([TodoListMiddleware()] if is_composite else [])],
         context_schema=RunContext,
         backend=build_backend(),
         permissions=ORCHESTRATOR_PERMISSIONS,

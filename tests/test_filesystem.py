@@ -13,7 +13,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 
 from owl_mind.backends.composite import (
-    MATERIALS_DIR,
     SKILLS_DIR,
     ReadOnlyFilesystemBackend,
     build_backend,
@@ -38,11 +37,12 @@ SECRET = "alice-private-profile-text"
 # Agent -> (paths it may read, paths it may write), as in the M1-C plan's table.
 EXPECTED = {
     ORCHESTRATOR: ({"memories", "skills", "scratch"}, {"scratch"}),
-    Subagent.CONCEPT_TUTOR: ({"materials", "skills"}, set()),
-    Subagent.PRACTICE_COACH: ({"materials", "skills"}, set()),
+    Subagent.CONCEPT_TUTOR: ({"skills"}, set()),
+    Subagent.PRACTICE_COACH: ({"skills"}, set()),
     Subagent.STUDY_PLANNER: ({"memories", "skills"}, set()),
-    Subagent.QUIZ_MASTER: ({"materials", "skills", "scratch/quiz"}, {"scratch/quiz"}),
+    Subagent.QUIZ_MASTER: ({"skills", "scratch/quiz"}, {"scratch/quiz"}),
 }
+# "materials" stays in the list: since M3-A no agent may read it, and these tests prove that.
 AREAS = ("materials", "memories", "skills", "scratch", "scratch/quiz", "reviews", "other")
 AGENTS = list(EXPECTED)
 
@@ -153,15 +153,16 @@ def test_write_matches_the_table(agent, area):
 @pytest.mark.parametrize("agent", AGENTS, ids=str)
 @pytest.mark.parametrize("tool", ["edit_file", "delete"])
 def test_changing_tools_are_denied_outside_writable_paths(agent, tool):
-    path = "/materials/graph-traversal.md"
+    path = "/skills/socratic-method/SKILL.md"
+    before = (SKILLS_DIR / "socratic-method" / "SKILL.md").read_text()
     arguments = {"file_path": path}
     if tool == "edit_file":
-        arguments |= {"old_string": "Graph", "new_string": "Changed"}
+        arguments |= {"old_string": "Socratic", "new_string": "Changed"}
 
     results = Harness().run(agent, call(tool, **arguments))
 
     assert DENIED in results[0].lower()
-    assert "Graph traversal" in (MATERIALS_DIR / "graph-traversal.md").read_text()
+    assert (SKILLS_DIR / "socratic-method" / "SKILL.md").read_text() == before
 
 
 def test_every_rule_list_ends_by_denying_everything():
@@ -181,18 +182,32 @@ def test_every_tutor_has_permissions():
 # -- reading real files ----------------------------------------------------
 
 
-def test_tutor_reads_the_seed_notes():
+def test_tutor_reads_a_skill_file():
     results = Harness().run(
-        Subagent.CONCEPT_TUTOR, call("read_file", file_path="/materials/graph-traversal.md")
+        Subagent.CONCEPT_TUTOR, call("read_file", file_path="/skills/socratic-method/SKILL.md")
     )
 
-    assert "Breadth-first search" in results[0]
+    assert "Ask one question at a time" in results[0]
 
 
 def test_tutor_lists_only_what_it_may_see():
-    results = Harness().run(Subagent.CONCEPT_TUTOR, call("ls", path="/materials/"))
+    results = Harness().run(Subagent.CONCEPT_TUTOR, call("ls", path="/skills/"))
 
-    assert "graph-traversal.md" in results[0]
+    assert "socratic-method" in results[0]
+
+
+@pytest.mark.parametrize("agent", AGENTS, ids=str)
+@pytest.mark.parametrize("tool", ["read_file", "ls"])
+def test_no_agent_can_reach_the_old_materials_path(agent, tool):
+    arguments = {"file_path": "/materials/graph-traversal.md"} if tool == "read_file" else {}
+    if tool == "ls":
+        arguments = {"path": "/materials/"}
+
+    results = Harness().run(agent, call(tool, **arguments))
+
+    # The refusal repeats the path that was asked for, so only the file's contents are checked.
+    assert "Breadth-first search" not in results[0]
+    assert DENIED in results[0].lower() or "not found" in results[0].lower()
 
 
 @pytest.mark.parametrize(
@@ -220,12 +235,12 @@ def test_bulk_tools_from_the_root_do_not_reveal_forbidden_files(steps):
 @pytest.mark.parametrize(
     "path",
     [
-        "/materials/../memories/profile.md",
-        "/materials/../../pyproject.toml",
+        "/skills/../memories/profile.md",
+        "/skills/../../pyproject.toml",
         "/etc/passwd",
         "~/.ssh/id_rsa",
         "../pyproject.toml",
-        "/materials/%2e%2e/%2e%2e/pyproject.toml",
+        "/skills/%2e%2e/%2e%2e/pyproject.toml",
     ],
 )
 def test_tools_refuse_path_escape(path):
@@ -315,8 +330,8 @@ def test_read_only_backend_still_reads(tmp_path):
 def test_routes_use_the_read_only_backend():
     routes = build_backend().routes
 
-    assert isinstance(routes["/materials/"], ReadOnlyFilesystemBackend)
     assert isinstance(routes["/skills/"], ReadOnlyFilesystemBackend)
+    assert "/materials/" not in routes
 
 
 # -- students stay apart ----------------------------------------------------
@@ -416,19 +431,18 @@ def test_skill_body_is_not_in_the_prompt_until_it_is_loaded():
 def test_missing_file_gives_an_error_the_agent_can_recover_from():
     results = Harness().run(
         Subagent.CONCEPT_TUTOR,
-        call("read_file", file_path="/materials/missing.md"),
-        call("read_file", file_path="/materials/hash-tables.md"),
+        call("read_file", file_path="/skills/missing.md"),
+        call("read_file", file_path="/skills/socratic-method/SKILL.md"),
     )
 
     assert "not found" in results[0].lower()
-    assert "Load factor" in results[1]
+    assert "Ask one question at a time" in results[1]
 
 
-def test_seed_notes_and_skills_exist_and_are_small():
-    notes = list(MATERIALS_DIR.glob("*.md"))
+def test_skills_exist_and_are_small_and_the_sample_notes_are_gone():
     skills = list(SKILLS_DIR.glob("*/SKILL.md"))
 
-    assert len(notes) >= 2
+    assert not (SKILLS_DIR.parent / "materials").exists()
     assert {path.parent.name for path in skills} == {
         "academic-integrity",
         "socratic-method",

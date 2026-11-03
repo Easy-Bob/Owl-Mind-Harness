@@ -139,14 +139,15 @@ def test_task_call_to_an_unavailable_subagent_is_refused_and_the_run_continues(t
 
     result = run.invoke(TaskKind.LEARN, [Subagent.CONCEPT_TUTOR])
 
-    assert "does not exist" in tool_results(result)[0]
+    # The fan-out check refuses it before DeepAgents' own check would.
+    assert "isn't available for this request" in tool_results(result)[0]
     # One request for the task call and one to carry on, with none for a subagent.
     assert len(run.fake.requests) == 2
     assert result["messages"][-1].content == "carried on"
 
 
-def test_removing_the_profile_makes_the_scope_proof_fail(monkeypatch):
-    """Proves the checks above detect the problem they exist for."""
+def test_removing_the_profile_shows_in_the_scope_proof_and_fan_out_still_refuses(monkeypatch):
+    """Proves the checks above detect the problem they exist for, and the second layer holds."""
     register_harness_profile(
         "deepseek",
         HarnessProfile(
@@ -154,13 +155,13 @@ def test_removing_the_profile_makes_the_scope_proof_fail(monkeypatch):
         ),
     )
     try:
-        run = Run(task("general-purpose"), say("subagent ran"), say("carried on"))
+        run = Run(task("general-purpose"), say("carried on"))
 
         result = run.invoke(TaskKind.LEARN, [Subagent.CONCEPT_TUTOR])
 
-        assert len(run.fake.requests) == 3
-        assert tool_results(result) == ["subagent ran"]
         assert "- general-purpose:" in run.task_description()
+        assert "isn't available for this request" in tool_results(result)[0]
+        assert len(run.fake.requests) == 2
     finally:
         register_harness_profile(
             "deepseek",
