@@ -11,7 +11,9 @@ import sys
 import uuid
 from pathlib import Path
 
+import psycopg
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from owl_mind.core.config import get_settings
@@ -41,6 +43,22 @@ def migrated():
         check=True,
         capture_output=True,
     )
+
+
+@pytest.fixture(autouse=True)
+def own_documents_only():
+    """Each test starts and ends with none of the test uploader's documents, so earlier runs
+    can't crowd results, and a local database keeps only real course files."""
+
+    def delete():
+        with psycopg.connect(get_settings().database_url) as connection:
+            connection.execute(
+                "DELETE FROM materials.documents WHERE uploaded_by = %s", (UPLOADER,)
+            )
+
+    delete()
+    yield
+    delete()
 
 
 class CountingEmbedder:
@@ -88,14 +106,61 @@ async def add(store, *texts: str, title: str = "Test notes") -> list[str]:
     return [document]
 
 
-def test_an_exact_identifier_is_found_by_keyword():
-    token = f"zqx{uuid.uuid4().hex[:8]}"
+def keyword_matches(sessions, query: str) -> set[str]:
+    """Chunks the exact-word ranking alone finds, with no help from search by meaning."""
+
+    async def run():
+        async with sessions() as session:
+            rows = await session.execute(
+                text(
+                    "SELECT text FROM materials.chunks"
+                    " WHERE search_text @@ websearch_to_tsquery('english', :query)"
+                ),
+                {"query": query},
+            )
+            return {row[0] for row in rows}
+
+    return run()
+
+
+@pytest.mark.parametrize("searched", ["whole", "module", "function"])
+def test_each_part_of_a_dotted_name_is_found_by_keyword(searched):
+    module, function = f"zqx{uuid.uuid4().hex[:8]}", f"push{uuid.uuid4().hex[:8]}"
+    query = {"whole": f"{module}.{function}", "module": module, "function": function}[searched]
+    passage = f"Call {module}.{function}(heap, item) to add an item to the heap."
 
     async def body(store, search):
-        await add(store, f"Call {token}.heappush to add an item to the heap.")
-        return await search.search(f"{token} usage", limit=MAX_RESULTS)
+        await add(store, passage)
+        engine = create_async_engine(sqlalchemy_url(get_settings().database_url))
+        try:
+            found = await keyword_matches(async_sessionmaker(engine), query)
+        finally:
+            await engine.dispose()
+        return found, await search.search(query, limit=MAX_RESULTS)
 
-    assert any(token in r.text for r in scenario(body))
+    found, results = scenario(body)
+
+    assert found == {passage}
+    assert any(passage == r.text for r in results)
+
+
+def test_text_with_no_dotted_names_is_indexed_as_before():
+    marker = f"zqx{uuid.uuid4().hex[:8]}"
+    passage = f"A {marker} heap keeps its smallest item at the root, with heap_push to add."
+
+    async def body(store, search):
+        await add(store, passage)
+        engine = create_async_engine(sqlalchemy_url(get_settings().database_url))
+        try:
+            sessions = async_sessionmaker(engine)
+            return [
+                await keyword_matches(sessions, f"{marker} {word}")
+                for word in ("root", "push", "heaps")
+            ]
+        finally:
+            await engine.dispose()
+
+    assert scenario(body) == [{passage}, {passage}, {passage}]
 
 
 def test_a_paraphrase_is_found_by_meaning_with_no_shared_words():
