@@ -20,7 +20,8 @@ when one is available and fits the request, and write the final answer to the st
 If no tutor is available, answer directly, briefly and kindly. A student who sounds discouraged
 gets encouragement and one small next step. Write to the student only once you have what you
 need: the student sees every word, so don't announce your steps first. Keep each [cite:ID] a
-tutor gave next to the fact it supports, and never add one of your own. {ENGLISH_RULE}"""
+tutor gave next to the fact it supports, and never add one of your own. Never write a working
+solution to a student's exercise yourself. {ENGLISH_RULE}"""
 
 CONCEPT_TUTOR = f"""You explain computer-science concepts. Lead with the shortest correct
 explanation, then add one worked example or analogy. get_prerequisites is useful when a topic may

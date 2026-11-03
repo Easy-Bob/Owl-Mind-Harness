@@ -18,6 +18,7 @@ _SAFE_EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     "retrieval": ("result_count", "top_score", "corpus_version", "cache_hit", "latency_ms"),
     "budget_step": ("step", "percent"),
     "answer": ("mode", "parts"),
+    "integrity": ("result", "reason", "layer"),
 }
 
 # Handoff events are checked value by value, because any free text could be a student's.

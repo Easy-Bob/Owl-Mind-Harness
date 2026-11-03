@@ -81,6 +81,7 @@ describe("followRun", () => {
     source.emit("subagent_start", { name: "practice_coach" });
     source.emit("tool_start", { name: "build_hint" });
     source.emit("todo_delta", { todos: [] });
+    source.emit("integrity_check", {});
 
     expect(source.url).toBe("/runs/r1/stream");
     expect(updates).toEqual([
@@ -88,6 +89,7 @@ describe("followRun", () => {
       { kind: "progress", label: "Asking practice coach" },
       { kind: "progress", label: "Using build hint" },
       { kind: "progress", label: "Planning" },
+      { kind: "progress", label: "Checking the answer" },
     ]);
   });
 

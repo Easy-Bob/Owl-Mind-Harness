@@ -15,6 +15,7 @@ from tests.fake_deepseek import USAGE
 from tests.test_factory import Run, tool_results
 from tests.test_filesystem import ALICE, call, say, task
 from tests.test_runtime import (
+    HINT,
     World,
     intent,
     kinds,
@@ -104,14 +105,17 @@ def test_a_stop_inside_a_tutor_stops_the_run_instead_of_becoming_a_tool_error(mo
 
 
 def test_a_turn_well_within_budget_takes_no_step(monkeypatch):
-    world = World(intent(problem_help=0.9), task("practice_coach"), say("report"), say("answer"))
+    world = World(
+        intent(problem_help=0.9), task("practice_coach"), say("report"), say("answer"), HINT
+    )
     with world.client() as client:
         run_id = start(client)["run_id"]
         events = stream(client, run_id)
 
     assert "budget_step" not in kinds(events)
     assert events[-1] == ("done", {"status": "completed"})
-    assert world.budgets.students[(ALICE, today())] == 4 * PER_CALL
+    # The integrity reviewer's call counts too.
+    assert world.budgets.students[(ALICE, today())] == 5 * PER_CALL
 
 
 @pytest.mark.parametrize(

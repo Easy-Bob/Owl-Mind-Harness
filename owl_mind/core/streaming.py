@@ -27,6 +27,10 @@ class StreamTranslator:
     # For a joined answer, where every orchestrator call only delegates and code writes the
     # answer, so anything it says on the way would reach the student as a stray preamble.
     hold_until_answer: bool = False
+    # Keep the answer here instead of streaming it, so it can be checked first (M3-B).
+    keep_answer: bool = False
+    answer: str = ""
+    answer_id: str | None = None
     _buffer: str = ""
     _held: str = ""
 
@@ -78,7 +82,11 @@ class StreamTranslator:
                 continue
             if not namespace and self.hold_until_answer:
                 held, self._held = self._held, ""
-                if not message.tool_calls:
+                if message.tool_calls:
+                    pass
+                elif self.keep_answer:
+                    self.answer, self.answer_id = held, message.id
+                else:
                     self._buffer += held
                     events += self.flush()
             usage = message.usage_metadata or {}

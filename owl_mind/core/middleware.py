@@ -5,6 +5,7 @@ Each one is code, so a model can't talk its way past it, and none makes a model 
 
 import logging
 import re
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
@@ -16,6 +17,7 @@ from langgraph.types import Command
 
 from owl_mind.core import replies
 from owl_mind.core.budget import BudgetStop, RunMeter
+from owl_mind.core.integrity import MAX_CODE_LINES, code_lines
 from owl_mind.core.intent.taxonomy import Subagent, TaskKind
 
 logger = logging.getLogger(__name__)
@@ -352,7 +354,58 @@ class JoinAnswerMiddleware(AgentMiddleware):
         record = getattr(getattr(request.runtime, "context", None), "record", None)
         if record is not None:
             await record("answer", {"mode": "joined", "parts": len(self.tutors)})
-        return ModelResponse(result=[AIMessage(content=text)])
+        # An id of its own, so the integrity check can replace it in the thread's history.
+        return ModelResponse(result=[AIMessage(content=text, id=f"joined-{uuid.uuid4()}")])
+
+
+_WITHHELD = (
+    "The tutor's reply was withheld because it solved the student's exercise ({reason}). Help "
+    "with hints and questions instead, and write no working solution yourself."
+)
+
+
+class ReportCheckMiddleware(AgentMiddleware):
+    """On turns whose answer isn't checked, a tutor's reply with a long code block is reviewed
+    before the orchestrator reads it, so a solution asked for as an explanation can't reach the
+    student. This runs before anything streams. Most replies have no long code and cost nothing.
+    """
+
+    def __init__(self, check: Any) -> None:
+        super().__init__()
+        self.check = check
+
+    async def awrap_tool_call(
+        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[Any]]
+    ) -> Any:
+        result = await handler(request)
+        if request.tool_call["name"] != "task":
+            return result
+        update = getattr(result, "update", None) if isinstance(result, Command) else None
+        messages = update.get("messages") if isinstance(update, dict) else None
+        reply = next((m for m in messages or [] if isinstance(m, ToolMessage)), None)
+        if reply is None or code_lines(reply.text) <= MAX_CODE_LINES:
+            return result
+        state = request.state or {}
+        asked = [m for m in state.get("messages", []) if isinstance(m, HumanMessage)]
+        # The tool's config carries the run's budget meter, so the review counts toward it.
+        config = getattr(request.runtime, "config", None) or {}
+        request_text = asked[-1].text if asked else ""
+        verdict = await self.check.review(request_text, reply.text, config, guard=False)
+        record = getattr(getattr(request.runtime, "context", None), "record", None)
+        if record is not None:
+            outcome = "withheld" if verdict.leak else "passed"
+            await record(
+                "integrity", {"result": outcome, "reason": verdict.reason, "layer": "report"}
+            )
+        if not verdict.leak:
+            return result
+        withheld = reply.model_copy(update={"content": _WITHHELD.format(reason=verdict.reason)})
+        return Command(
+            graph=result.graph,
+            update={**update, "messages": [withheld if m is reply else m for m in messages]},
+            resume=result.resume,
+            goto=result.goto,
+        )
 
 
 def turn_middleware(

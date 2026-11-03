@@ -13,6 +13,7 @@ const PROGRESS_LABELS: Record<string, (data: { name?: string }) => string> = {
   subagent_start: ({ name }) => `Asking ${(name ?? "a tutor").replaceAll("_", " ")}`,
   tool_start: ({ name }) => `Using ${(name ?? "a tool").replaceAll("_", " ")}`,
   todo_delta: () => "Planning",
+  integrity_check: () => "Checking the answer",
 };
 
 export function followRun(runId: string, onUpdate: (update: RunUpdate) => void): () => void {

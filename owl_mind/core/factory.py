@@ -20,9 +20,10 @@ from owl_mind.backends.permissions import ORCHESTRATOR_PERMISSIONS, TUTOR_PERMIS
 from owl_mind.core import prompts
 from owl_mind.core.budget import RunMeter
 from owl_mind.core.config import get_settings
+from owl_mind.core.integrity import IntegrityCheck, needs_check
 from owl_mind.core.intent.taxonomy import Subagent, TaskKind
 from owl_mind.core.limits import RUN_LIMITS
-from owl_mind.core.middleware import JoinAnswerMiddleware, turn_middleware
+from owl_mind.core.middleware import JoinAnswerMiddleware, ReportCheckMiddleware, turn_middleware
 from owl_mind.core.model import ModelTier, get_chat_model
 from owl_mind.core.subagents import TUTORS
 from owl_mind.tools.context import RunContext
@@ -137,6 +138,10 @@ def build_owl_agent(
     todos = [TodoListMiddleware()] if is_composite else []
     joins = is_composite and get_settings().composite_answer == "join"
     join = [JoinAnswerMiddleware(tuple(s.value for s in subagents))] if joins else []
+    # Checked turns are reviewed at the end. Elsewhere, a tutor's reply is checked on arrival.
+    report_check = (
+        [] if needs_check(subagents) else [ReportCheckMiddleware(IntegrityCheck(get_model))]
+    )
     return create_deep_agent(
         model=get_model(
             ModelTier.LARGE if is_composite else ModelTier.SMALL,
@@ -146,7 +151,7 @@ def build_owl_agent(
         tools=[get_due_topics],
         system_prompt=prompts.ORCHESTRATOR,
         subagents=specs,
-        middleware=[*join, *checks(orchestrator=True), *todos],
+        middleware=[*join, *checks(orchestrator=True), *report_check, *todos],
         context_schema=RunContext,
         backend=backend,
         permissions=ORCHESTRATOR_PERMISSIONS,
