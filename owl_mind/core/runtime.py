@@ -64,6 +64,7 @@ class Services:
     ingestor: Any = None
     search: Any = None
     handoffs: Any = None
+    forum_accounts: Any = None
 
 
 @dataclass(frozen=True)

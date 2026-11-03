@@ -15,15 +15,21 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from owl_mind.api import materials  # noqa: F401  Registers its routes on admin_router.
 from owl_mind.api.admin import admin_router
 from owl_mind.api.auth import auth_router, check_jwt_secret
+from owl_mind.api.forum_account import HideCallbackQuery
+from owl_mind.api.forum_account import router as forum_account_router
 from owl_mind.api.handoffs import router as handoffs_router
 from owl_mind.api.routes import router
-from owl_mind.core.config import get_settings
+from owl_mind.core.config import ConfigError, get_settings
 from owl_mind.core.events import RedisEventBus
 from owl_mind.core.intent.classifier import IntentStep
 from owl_mind.core.persistence import open_persistence
 from owl_mind.core.runtime import Services
+from owl_mind.forum.accounts import ForumAccounts, GitHubOAuth, TokenCipher
+from owl_mind.forum.accounts import PostgresAccountStore as PostgresForumAccountStore
 from owl_mind.forum.github import GitHubForum
-from owl_mind.forum.handoff import HandoffService, PostgresHandoffStore
+from owl_mind.forum.handoff import HandoffService
+from owl_mind.forum.replies import ReplyPoller
+from owl_mind.forum.store import PostgresHandoffStore
 from owl_mind.materials.embedding import FastEmbedEmbedder
 from owl_mind.materials.ingest import Ingestor
 from owl_mind.materials.search import MaterialsSearch, RedisSearchCache
@@ -49,13 +55,33 @@ def _forum(settings) -> GitHubForum | None:
     )
 
 
-async def _retry_handoffs(services: Services) -> None:
+def _forum_accounts(settings, sessions) -> ForumAccounts | None:
+    """Connecting accounts needs the app's client ID and secret, and a key to encrypt tokens."""
+    secret, key = settings.forum_client_secret, settings.forum_key_encryption_key
+    if not (settings.forum_client_id and secret and key):
+        return None
+    try:
+        cipher = TokenCipher.from_setting(key.get_secret_value())
+    except ValueError:
+        raise ConfigError("Missing or invalid settings: FORUM_KEY_ENCRYPTION_KEY") from None
+    oauth = GitHubOAuth(
+        settings.forum_client_id, secret.get_secret_value(), settings.forum_oauth_redirect_url
+    )
+    return ForumAccounts(PostgresForumAccountStore(sessions), oauth, cipher)
+
+
+async def _forum_jobs(services: Services) -> None:
+    """Retries approved posts and checks posts for replies. Moves to workers in M4-B."""
+    forum = services.handoffs.forum
+    poller = ReplyPoller(services.handoffs.store, forum) if forum is not None else None
     while True:
         await asyncio.sleep(_HANDOFF_RETRY_SECONDS)
         try:
             await services.handoffs.retry_pending()
+            if poller is not None:
+                await poller.poll_due()
         except Exception as exc:
-            logger.warning("Handoff retry failed: %s", type(exc).__name__)
+            logger.warning("Forum job failed: %s", type(exc).__name__)
 
 
 @asynccontextmanager
@@ -70,7 +96,10 @@ async def _production_services() -> AsyncIterator[Services]:
     ingestor = Ingestor(materials_store, embedder, settings.ingest_timeout_seconds)
     search = MaterialsSearch(sessions, materials_store, embedder, RedisSearchCache(client))
     forum = _forum(settings)
-    handoffs = HandoffService(PostgresHandoffStore(sessions), forum, settings.forum_category)
+    forum_accounts = _forum_accounts(settings, sessions)
+    handoffs = HandoffService(
+        PostgresHandoffStore(sessions), forum, settings.forum_category, forum_accounts
+    )
     try:
         async with open_persistence(settings.database_url) as persistence:
             yield Services(
@@ -86,10 +115,13 @@ async def _production_services() -> AsyncIterator[Services]:
                 ingestor=ingestor,
                 search=search,
                 handoffs=handoffs,
+                forum_accounts=forum_accounts,
             )
     finally:
         if forum is not None:
             await forum.aclose()
+        if forum_accounts is not None:
+            await forum_accounts.oauth.aclose()
         await ingestor.shutdown()
         await client.aclose()
         await engine.dispose()
@@ -109,7 +141,7 @@ def create_app(services_factory: Callable = _production_services) -> FastAPI:
             retrying = None
             if services.handoffs is not None:
                 await services.handoffs.store.fail_unfinished()
-                retrying = asyncio.create_task(_retry_handoffs(services))
+                retrying = asyncio.create_task(_forum_jobs(services))
             yield
             if retrying is not None:
                 retrying.cancel()
@@ -117,11 +149,15 @@ def create_app(services_factory: Callable = _production_services) -> FastAPI:
                 task.cancel()
             await asyncio.gather(*app.state.run_tasks, return_exceptions=True)
 
+    access_log = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, HideCallbackQuery) for f in access_log.filters):
+        access_log.addFilter(HideCallbackQuery())
     application = FastAPI(title="Owl-Mind Harness", lifespan=lifespan)
     application.include_router(auth_router)
     application.include_router(admin_router)
     application.include_router(router)
     application.include_router(handoffs_router)
+    application.include_router(forum_account_router)
 
     @application.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:

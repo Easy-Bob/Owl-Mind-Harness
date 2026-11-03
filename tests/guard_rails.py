@@ -16,7 +16,12 @@ CONFIG_MODULE = "owl_mind/core/config.py"
 FACTORY_MODULE = "owl_mind/core/factory.py"
 FORUM_PACKAGE = "owl_mind.forum"
 # The fixed handoff path. No agent, tool or subagent module may reach the forum.
-FORUM_USERS = {"owl_mind/api/app.py", "owl_mind/api/handoffs.py", "owl_mind/core/runtime.py"}
+FORUM_USERS = {
+    "owl_mind/api/app.py",
+    "owl_mind/api/handoffs.py",
+    "owl_mind/api/forum_account.py",
+    "owl_mind/core/runtime.py",
+}
 
 PROVIDER_MODULES = {
     "anthropic",

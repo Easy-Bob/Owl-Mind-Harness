@@ -9,7 +9,10 @@ import {
   type Thread,
   type User,
 } from "../shared/api";
+import { ForumAccountControl } from "./ForumAccountControl";
 import { HandoffCard } from "./HandoffCard";
+
+const UNREAD_CHECK_MS = 60_000;
 import { Message } from "./Message";
 import { followRun } from "./runStream";
 
@@ -26,10 +29,12 @@ export function ChatPage({ user, onLoggedOut }: Props) {
   const [draft, setDraft] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [handoffs, setHandoffs] = useState<Handoff[]>([]);
+  const [unread, setUnread] = useState<Record<string, number>>({});
   // Similar posts arrive only with the live event, so they're kept per draft here.
   const [similar, setSimilar] = useState<Record<string, SimilarPost[]>>({});
   // Set straight away, so a double click can't start two runs before React re-renders.
   const sending = useRef(false);
+  const selectedRef = useRef<string | null>(null);
   const stopFollowing = useRef<(() => void) | null>(null);
   const log = useRef<HTMLDivElement>(null);
 
@@ -43,6 +48,10 @@ export function ChatPage({ user, onLoggedOut }: Props) {
     },
     [onLoggedOut],
   );
+
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
 
   useEffect(() => {
     api.threads().then(setThreads).catch(handleFailure);
@@ -60,9 +69,40 @@ export function ChatPage({ user, onLoggedOut }: Props) {
   const loadHandoffs = useCallback((threadId: string) => {
     api
       .handoffs(threadId)
-      .then(setHandoffs)
+      .then((loaded) => {
+        setHandoffs(loaded);
+        // The replies are on screen now, so they stop counting as new. They keep their "New"
+        // label until the session is opened again.
+        const unseen = loaded.filter((handoff) => handoff.replies?.some((reply) => reply.new));
+        if (unseen.length > 0) {
+          Promise.all(unseen.map((handoff) => api.markRepliesSeen(handoff.id)))
+            .then(() => setUnread((counts) => ({ ...counts, [threadId]: 0 })))
+            .catch(() => undefined);
+        }
+      })
       .catch(() => setHandoffs([]));
   }, []);
+
+  // Forum replies are optional on the server, so failing to count them is not an error to show.
+  const loadUnread = useCallback(() => {
+    api
+      .unreadReplies()
+      .then((counts) => {
+        setUnread(counts);
+        // Replies for the open session appear on its card straight away.
+        const open = selectedRef.current;
+        if (open && counts[open]) {
+          loadHandoffs(open);
+        }
+      })
+      .catch(() => undefined);
+  }, [loadHandoffs]);
+
+  useEffect(() => {
+    loadUnread();
+    const timer = setInterval(loadUnread, UNREAD_CHECK_MS);
+    return () => clearInterval(timer);
+  }, [loadUnread]);
 
   function follow(runId: string, threadId: string) {
     let text = "";
@@ -183,10 +223,16 @@ export function ChatPage({ user, onLoggedOut }: Props) {
                 disabled={running}
               >
                 {thread.title}
+                {unread[thread.id] ? (
+                  <span className="unread-badge" title="New forum replies">
+                    {unread[thread.id]} new
+                  </span>
+                ) : null}
               </button>
             </li>
           ))}
         </ul>
+        <ForumAccountControl onFailure={handleFailure} />
         <div className="account">
           <span>{user.email}</span>
           <button type="button" onClick={logout}>

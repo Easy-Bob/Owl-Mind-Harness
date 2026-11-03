@@ -14,15 +14,19 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from owl_mind.core import replies
 from owl_mind.core.config import get_settings
-from owl_mind.forum.github import ForumPost, ForumUnavailable, GitHubForum, SimilarPost
-from owl_mind.forum.handoff import (
-    MAX_RETRIES,
-    HandoffService,
-    InMemoryHandoffStore,
-    known_values,
-    summarize,
+from owl_mind.forum.github import (
+    DiscussionGone,
+    ForumAuthFailed,
+    ForumPost,
+    ForumUnavailable,
+    GitHubForum,
+    Replies,
+    Reply,
+    SimilarPost,
 )
+from owl_mind.forum.handoff import MAX_RETRIES, HandoffService, known_values, summarize
 from owl_mind.forum.redact import escape_markdown, for_graded_problem, redact, trim_code
+from owl_mind.forum.store import InMemoryHandoffStore
 from tests.test_auth import ALICE_EMAIL, logged_in
 from tests.test_auth import settings as auth_settings  # noqa: F401  Applied to every test.
 from tests.test_runtime import World, parse_sse
@@ -40,29 +44,59 @@ class FakeForum:
         self.posts: list[tuple[str, str, str]] = []
         self.searches: list[str] = []
         self.failures = 0
+        self.tokens: list[str | None] = []
+        self.refused_tokens: set[str] = set()
+        self.replies: dict[str, list[Reply]] = {}
+        self.reply_checks: list[str] = []
+        self.gone: set[str] = set()
+        self.down = False
 
     async def search_similar(self, text: str, limit: int = 3) -> list[SimilarPost]:
         self.searches.append(text)
         return [SimilarPost("Dijkstra with negative edges", "https://github.com/owner/forum/1")]
 
-    async def post_question(self, category: str, title: str, body: str) -> ForumPost:
+    async def post_question(
+        self, category: str, title: str, body: str, user_token: str | None = None
+    ) -> ForumPost:
         if self.failures:
             self.failures -= 1
             raise ForumUnavailable("GitHub answered 502")
+        if user_token in self.refused_tokens:
+            raise ForumAuthFailed("GitHub refused the token")
         self.posts.append((category, title, body))
-        return ForumPost(f"https://github.com/owner/forum/discussions/{len(self.posts)}", "D_1")
+        self.tokens.append(user_token)
+        number = len(self.posts)
+        return ForumPost(f"https://github.com/owner/forum/discussions/{number}", f"D_{number}")
 
-    async def get_replies(self, node_id: str) -> list:
-        return []
+    async def get_replies(self, node_id: str) -> Replies:
+        if node_id in self.gone:
+            raise DiscussionGone
+        if self.down:
+            raise ForumUnavailable("GitHub answered 502")
+        self.reply_checks.append(node_id)
+        return Replies(list(self.replies.get(node_id, [])), True)
 
 
-def handoff_world(forum: FakeForum | None) -> World:
+class Clock:
+    """A clock that tests move by hand."""
+
+    def __init__(self, start: datetime = datetime(2026, 11, 2, 12, tzinfo=UTC)) -> None:
+        self.now = start
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, **delta: float) -> None:
+        self.now += timedelta(**delta)
+
+
+def handoff_world(forum: FakeForum | None, clock: Clock | None = None, accounts=None) -> World:
     world = World()
     world.app.dependency_overrides.clear()
     world.handoff_store = InMemoryHandoffStore()
-    world.services = dataclasses.replace(
-        world.services, handoffs=HandoffService(world.handoff_store, forum, "Q&A")
-    )
+    world.clock = clock or Clock()
+    service = HandoffService(world.handoff_store, forum, "Q&A", accounts, world.clock)
+    world.services = dataclasses.replace(world.services, handoffs=service, forum_accounts=accounts)
     return world
 
 
@@ -372,8 +406,7 @@ def test_one_post_per_ten_minutes():
         second, _ = ask_for_tutor(client)
         draft = draft_of(client, second)
         blocked = approve(client, draft)
-        for handoff_id in world.handoff_store.posted_at:
-            world.handoff_store.posted_at[handoff_id] -= timedelta(minutes=11)
+        world.clock.advance(minutes=11)
         allowed = approve(client, draft)
 
     assert blocked.status_code == 400
@@ -491,6 +524,21 @@ class FakeGitHub:
         self.status = status
         self.requests: list[httpx.Request] = []
         self.token_grants = 0
+        self.error_type = "FORBIDDEN"
+        self.refuse_bearer = False
+        comment = {"createdAt": "2026-11-02T00:00:00Z"}
+        nested = {"id": "C2", "body": "Agreed.", "author": None, **comment}
+        comments = [
+            {
+                "id": "C1",
+                "body": "Use a heap.",
+                "author": {"login": "tutor"},
+                "replies": {"totalCount": 1, "nodes": [nested]},
+                **comment,
+            },
+            {"id": "C3", "body": "Thanks", "author": {"login": "student"}, **comment},
+        ]
+        self.node = {"answer": {"id": "C1"}, "comments": {"totalCount": 2, "nodes": comments}}
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -503,11 +551,18 @@ class FakeGitHub:
         if path == "/app/installations/77/access_tokens":
             self.token_grants += 1
             return httpx.Response(201, json={"token": "ghs_installation"})
-        assert path == "/graphql" and auth == "token ghs_installation"
+        assert path == "/graphql"
+        if auth.startswith("Bearer "):
+            if self.refuse_bearer:
+                return httpx.Response(401, json={})
+        else:
+            assert auth == "token ghs_installation"
         if self.status != 200:
             return httpx.Response(self.status, json={})
         if self.graphql_errors:
-            return httpx.Response(200, json={"errors": [{"message": "no"}]})
+            return httpx.Response(
+                200, json={"errors": [{"message": "no", "type": self.error_type}]}
+            )
         query = json.loads(request.content)["query"]
         if "createDiscussion" in query:
             discussion = {"id": "D_9", "url": "https://github.com/owner/forum/discussions/9"}
@@ -523,9 +578,9 @@ class FakeGitHub:
                 {"title": "Old question", "url": "https://github.com/owner/forum/discussions/2"}
             ]
             return httpx.Response(200, json={"data": {"search": {"nodes": nodes}}})
-        comments = [{"id": "C1", "body": "Use a heap.", "createdAt": "2026-11-02T00:00:00Z"}]
-        node = {"answer": {"id": "C1"}, "comments": {"nodes": comments}}
-        return httpx.Response(200, json={"data": {"node": node}})
+        if self.node is None:
+            return httpx.Response(200, json={"data": {"node": None}})
+        return httpx.Response(200, json={"data": {"node": self.node}})
 
     def variables(self, index: int) -> dict:
         return json.loads(self.requests[index].content)["variables"]
@@ -565,9 +620,52 @@ def test_client_searches_only_the_forum_repository(app_key):
 def test_client_reads_replies_and_the_accepted_answer(app_key):
     forum, _ = github(app_key)
 
-    [reply] = asyncio.run(forum.get_replies("D_9"))
+    result = asyncio.run(forum.get_replies("D_9"))
 
-    assert reply.body == "Use a heap." and reply.is_answer
+    assert result.complete
+    assert [(r.id, r.author, r.body, r.is_answer) for r in result.replies] == [
+        ("C1", "tutor", "Use a heap.", True),
+        ("C2", "ghost", "Agreed.", False),
+        ("C3", "student", "Thanks", False),
+    ]
+    assert result.replies[0].created_at == datetime(2026, 11, 2, tzinfo=UTC)
+
+
+def test_client_says_when_more_comments_exist_than_one_request_returns(app_key):
+    forum, fake = github(app_key)
+    fake.node["comments"]["totalCount"] = 80
+
+    assert not asyncio.run(forum.get_replies("D_9")).complete
+
+
+@pytest.mark.parametrize("deleted", ["null node", "NOT_FOUND"])
+def test_client_reports_a_deleted_discussion(app_key, deleted):
+    forum, fake = github(app_key)
+    if deleted == "null node":
+        fake.node = None
+    else:
+        fake.graphql_errors = True
+        fake.error_type = "NOT_FOUND"
+
+    with pytest.raises(DiscussionGone):
+        asyncio.run(forum.get_replies("D_9"))
+
+
+def test_client_posts_with_a_students_token_as_that_student(app_key):
+    forum, fake = github(app_key)
+
+    asyncio.run(forum.post_question("Q&A", "Title", "Body", user_token="ghu_student"))
+
+    create = fake.requests[-1]
+    assert create.headers["Authorization"] == "Bearer ghu_student"
+
+
+def test_client_reports_a_refused_student_token(app_key):
+    forum, fake = github(app_key)
+    fake.refuse_bearer = True
+
+    with pytest.raises(ForumAuthFailed):
+        asyncio.run(forum.post_question("Q&A", "Title", "Body", user_token="ghu_revoked"))
 
 
 def test_client_refreshes_a_token_close_to_expiry(app_key):

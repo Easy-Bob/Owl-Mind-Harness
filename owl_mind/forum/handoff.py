@@ -5,15 +5,15 @@ Nothing reaches the forum without the student approving the exact text that will
 
 import re
 import uuid
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from owl_mind.forum.github import Forum, ForumUnavailable, SimilarPost
+from owl_mind.forum.accounts import RECONNECT_MESSAGE, ForumAccounts, ReconnectNeeded
+from owl_mind.forum.github import Forum, ForumAuthFailed, ForumUnavailable, SimilarPost
 from owl_mind.forum.redact import CODE_LINES, escape_markdown, for_graded_problem, redact, trim_code
+from owl_mind.forum.store import Handoff, HandoffStore, SavedReply
 
 POST_INTERVAL = timedelta(minutes=10)
 MAX_TITLE_CHARS = 120
@@ -25,21 +25,6 @@ _ERROR_LINE = re.compile(
 )
 
 
-@dataclass(frozen=True)
-class Handoff:
-    id: uuid.UUID
-    student_id: uuid.UUID
-    thread_id: uuid.UUID
-    status: str
-    title: str
-    body: str
-    graded: bool
-    category: str
-    url: str | None = None
-    attempts: int = 0
-    created_at: datetime | None = None
-
-
 class HandoffError(Exception):
     """The request can't be done. The message is safe to show the student."""
 
@@ -49,28 +34,6 @@ class NeedsReview(Exception):
 
     def __init__(self, handoff: Handoff) -> None:
         self.handoff = handoff
-
-
-@runtime_checkable
-class HandoffStore(Protocol):
-    async def save(self, handoff: Handoff) -> None: ...
-
-    async def get(self, student_id: uuid.UUID, handoff_id: uuid.UUID) -> Handoff | None: ...
-
-    async def for_thread(self, student_id: uuid.UUID, thread_id: uuid.UUID) -> list[Handoff]: ...
-
-    async def claim(self, handoff_id: uuid.UUID, expected: str, status: str) -> bool:
-        """Change the status only if it's still the expected one, so two approvals post once."""
-
-    async def last_posted_at(self, student_id: uuid.UUID) -> datetime | None: ...
-
-    async def record_post(self, handoff_id: uuid.UUID, url: str, node_id: str) -> None: ...
-
-    async def due_for_retry(self) -> list[Handoff]: ...
-
-    async def fail_unfinished(self) -> None:
-        """After a restart, a post that was being sent may or may not exist on the forum.
-        Retrying could post it twice, so the student gets the copyable fallback instead."""
 
 
 def known_values(email: str) -> list[str]:
@@ -108,10 +71,35 @@ def prepare(title: str, body: str, graded: bool, known_values: list[str]) -> tup
 
 
 class HandoffService:
-    def __init__(self, store: HandoffStore, forum: Forum | None, category: str) -> None:
+    def __init__(
+        self,
+        store: HandoffStore,
+        forum: Forum | None,
+        category: str,
+        accounts: ForumAccounts | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
         self.store = store
         self.forum = forum
         self.category = category
+        self.accounts = accounts
+        self._clock = clock
+
+    async def _author(self, student_id: uuid.UUID) -> tuple[str, str] | None:
+        """The student's own token and login, or None for the bot. Never silently the bot when
+        a connected account has stopped working."""
+        if self.accounts is None:
+            return None
+        try:
+            return await self.accounts.token_for(student_id)
+        except ReconnectNeeded as exc:
+            raise HandoffError(RECONNECT_MESSAGE) from exc
+
+    async def post_as(self, student_id: uuid.UUID) -> str:
+        if self.accounts is None:
+            return "bot"
+        status = await self.accounts.status(student_id)
+        return status["login"] if status["connected"] else "bot"
 
     async def draft(
         self,
@@ -132,7 +120,7 @@ class HandoffService:
             body,
             False,
             self.category,
-            created_at=datetime.now(UTC),
+            created_at=self._clock(),
         )
         await self.store.save(handoff)
         similar: list[SimilarPost] = []
@@ -167,31 +155,49 @@ class HandoffService:
             await self.store.save(revised)
             raise NeedsReview(revised)
         last = await self.store.last_posted_at(student_id)
-        if last is not None and datetime.now(UTC) - last < POST_INTERVAL:
+        if last is not None and self._clock() - last < POST_INTERVAL:
             raise HandoffError("You can post once every 10 minutes. Try again shortly.")
+        author = await self._author(student_id)
         await self.store.save(replace(handoff, title=title, body=body, graded=graded))
         if not await self.store.claim(handoff_id, "draft", "posting"):
             raise HandoffError("This draft was already sent or cancelled.")
-        return await self._post(await self.store.get(student_id, handoff_id))
+        return await self._post(await self.store.get(student_id, handoff_id), author)
 
-    async def _post(self, handoff: Handoff) -> Handoff:
+    async def _post(self, handoff: Handoff, author: tuple[str, str] | None) -> Handoff:
         if self.forum is None:
             failed = replace(handoff, status="fallback", attempts=handoff.attempts + 1)
             await self.store.save(failed)
             return failed
+        token, login = author if author else (None, "bot")
         try:
             post = await self.forum.post_question(
-                handoff.category, escape_markdown(handoff.title), escape_markdown(handoff.body)
+                handoff.category,
+                escape_markdown(handoff.title),
+                escape_markdown(handoff.body),
+                user_token=token,
             )
+        except ForumAuthFailed:
+            if token is None:
+                raise
+            # The student's token was refused. Give the draft back rather than post as the bot.
+            await self.accounts.mark_broken(handoff.student_id)
+            await self.store.save(replace(handoff, status="draft"))
+            raise HandoffError(RECONNECT_MESSAGE) from None
         except ForumUnavailable:
             attempts = handoff.attempts + 1
             status = "retrying" if attempts < MAX_RETRIES else "fallback"
             failed = replace(handoff, status=status, attempts=attempts)
             await self.store.save(failed)
             return failed
-        posted = replace(handoff, status="posted", url=post.url, attempts=handoff.attempts + 1)
+        posted = replace(
+            handoff,
+            status="posted",
+            url=post.url,
+            attempts=handoff.attempts + 1,
+            posted_as=login,
+        )
         await self.store.save(posted)
-        await self.store.record_post(handoff.id, post.url, post.node_id)
+        await self.store.record_post(handoff.id, post.url, post.node_id, self._clock())
         return posted
 
     async def retry_pending(self) -> int:
@@ -199,7 +205,13 @@ class HandoffService:
         retried = 0
         for handoff in await self.store.due_for_retry():
             if await self.store.claim(handoff.id, "retrying", "posting"):
-                await self._post(replace(handoff, status="posting"))
+                handoff = replace(handoff, status="posting")
+                try:
+                    author = await self._author(handoff.student_id)
+                    await self._post(handoff, author)
+                except HandoffError:
+                    # Nobody is waiting to read the message, so give the copyable text instead.
+                    await self.store.save(replace(handoff, status="fallback"))
                 retried += 1
         return retried
 
@@ -212,7 +224,12 @@ class HandoffService:
         return replace(handoff, status="cancelled")
 
 
-def public(handoff: Handoff, home_url: str | None) -> dict[str, Any]:
+def public(
+    handoff: Handoff,
+    home_url: str | None,
+    post_as: str | None = None,
+    replies: list[SavedReply] = (),
+) -> dict[str, Any]:
     return {
         "id": str(handoff.id),
         "status": handoff.status,
@@ -221,130 +238,17 @@ def public(handoff: Handoff, home_url: str | None) -> dict[str, Any]:
         "graded": handoff.graded,
         "url": handoff.url,
         "forum_url": home_url,
+        # Who a draft will post as, or who a post was made by: a GitHub login, or "bot".
+        "post_as": handoff.posted_as or post_as,
+        "replies": [
+            {
+                "id": reply.id,
+                "author": reply.author,
+                "body": reply.body,
+                "created_at": reply.created_at.isoformat(),
+                "is_answer": reply.is_answer,
+                "new": not reply.seen,
+            }
+            for reply in replies
+        ],
     }
-
-
-class InMemoryHandoffStore:
-    def __init__(self) -> None:
-        self.handoffs: dict[uuid.UUID, Handoff] = {}
-        self.posts: dict[uuid.UUID, tuple[str, str]] = {}
-        self.posted_at: dict[uuid.UUID, datetime] = {}
-
-    async def save(self, handoff: Handoff) -> None:
-        self.handoffs[handoff.id] = handoff
-
-    async def get(self, student_id, handoff_id) -> Handoff | None:
-        handoff = self.handoffs.get(handoff_id)
-        return handoff if handoff and handoff.student_id == student_id else None
-
-    async def for_thread(self, student_id, thread_id) -> list[Handoff]:
-        return [
-            h
-            for h in self.handoffs.values()
-            if h.student_id == student_id and h.thread_id == thread_id
-        ]
-
-    async def claim(self, handoff_id, expected, status) -> bool:
-        handoff = self.handoffs.get(handoff_id)
-        if handoff is None or handoff.status != expected:
-            return False
-        self.handoffs[handoff_id] = replace(handoff, status=status)
-        return True
-
-    async def last_posted_at(self, student_id) -> datetime | None:
-        times = [t for i, t in self.posted_at.items() if self.handoffs[i].student_id == student_id]
-        return max(times, default=None)
-
-    async def record_post(self, handoff_id, url, node_id) -> None:
-        self.posts[handoff_id] = (url, node_id)
-        self.posted_at[handoff_id] = datetime.now(UTC)
-
-    async def due_for_retry(self) -> list[Handoff]:
-        return [h for h in self.handoffs.values() if h.status == "retrying"]
-
-    async def fail_unfinished(self) -> None:
-        for handoff in list(self.handoffs.values()):
-            if handoff.status == "posting":
-                self.handoffs[handoff.id] = replace(handoff, status="fallback")
-
-
-_SAVE = """
-INSERT INTO app.handoffs (id, student_id, thread_id, status, title, body, graded, category,
-    url, attempts)
-VALUES (:id, :student_id, :thread_id, :status, :title, :body, :graded, :category, :url, :attempts)
-ON CONFLICT (id) DO UPDATE SET status = :status, title = :title, body = :body, graded = :graded,
-    url = :url, attempts = :attempts, updated_at = now()
-"""
-_COLUMNS = (
-    "id, student_id, thread_id, status, title, body, graded, category, url, attempts, created_at"
-)
-
-
-class PostgresHandoffStore:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
-        self._sessions = sessions
-
-    async def save(self, handoff: Handoff) -> None:
-        values = {k: v for k, v in vars(handoff).items() if k != "created_at"}
-        async with self._sessions.begin() as session:
-            await session.execute(text(_SAVE), values)
-
-    async def _select(self, where: str, params: dict) -> list[Handoff]:
-        async with self._sessions() as session:
-            rows = await session.execute(
-                text(f"SELECT {_COLUMNS} FROM app.handoffs WHERE {where} ORDER BY created_at"),
-                params,
-            )
-        return [Handoff(**row._mapping) for row in rows]
-
-    async def get(self, student_id, handoff_id) -> Handoff | None:
-        found = await self._select(
-            "id = :id AND student_id = :student", {"id": handoff_id, "student": student_id}
-        )
-        return found[0] if found else None
-
-    async def for_thread(self, student_id, thread_id) -> list[Handoff]:
-        return await self._select(
-            "student_id = :student AND thread_id = :thread",
-            {"student": student_id, "thread": thread_id},
-        )
-
-    async def claim(self, handoff_id, expected, status) -> bool:
-        async with self._sessions.begin() as session:
-            claimed = await session.scalar(
-                text(
-                    "UPDATE app.handoffs SET status = :status, updated_at = now()"
-                    " WHERE id = :id AND status = :expected RETURNING id"
-                ),
-                {"id": handoff_id, "expected": expected, "status": status},
-            )
-        return claimed is not None
-
-    async def last_posted_at(self, student_id) -> datetime | None:
-        async with self._sessions() as session:
-            return await session.scalar(
-                text(
-                    "SELECT max(p.posted_at) FROM app.forum_posts p"
-                    " JOIN app.handoffs h ON h.id = p.handoff_id WHERE h.student_id = :student"
-                ),
-                {"student": student_id},
-            )
-
-    async def record_post(self, handoff_id, url, node_id) -> None:
-        async with self._sessions.begin() as session:
-            await session.execute(
-                text(
-                    "INSERT INTO app.forum_posts (handoff_id, url, node_id)"
-                    " VALUES (:id, :url, :node) ON CONFLICT (handoff_id) DO NOTHING"
-                ),
-                {"id": handoff_id, "url": url, "node": node_id},
-            )
-
-    async def due_for_retry(self) -> list[Handoff]:
-        return await self._select("status = 'retrying'", {})
-
-    async def fail_unfinished(self) -> None:
-        async with self._sessions.begin() as session:
-            await session.execute(
-                text("UPDATE app.handoffs SET status = 'fallback' WHERE status = 'posting'")
-            )

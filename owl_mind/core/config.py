@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     forum_category: str = "Q&A"
     forum_app_id: str | None = None
     forum_app_private_key_path: Path | None = None
+    forum_client_id: str | None = None
+    forum_client_secret: SecretStr | None = None
+    forum_oauth_redirect_url: str = "http://localhost:5173/forum/account/callback"
+    forum_key_encryption_key: SecretStr | None = None
 
 
 @lru_cache

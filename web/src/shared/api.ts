@@ -7,6 +7,20 @@ export type Thread = { id: string; title: string; created_at: string };
 export type HistoryMessage = { role: "user" | "assistant"; content: string };
 export type RunStarted = { thread_id: string; run_id: string };
 export type SimilarPost = { title: string; url: string };
+export type ForumReply = {
+  id: string;
+  author: string;
+  body: string;
+  created_at: string;
+  is_answer: boolean;
+  new: boolean;
+};
+export type ForumAccount = {
+  available: boolean;
+  connected: boolean;
+  login: string | null;
+  needs_reconnect: boolean;
+};
 export type Handoff = {
   id: string;
   status: "draft" | "posting" | "posted" | "retrying" | "fallback" | "cancelled";
@@ -15,6 +29,9 @@ export type Handoff = {
   graded: boolean;
   url: string | null;
   forum_url: string | null;
+  // A GitHub login, or "bot" for the Owl-Mind app.
+  post_as: string | null;
+  replies: ForumReply[];
 };
 
 export class ApiError extends Error {
@@ -84,4 +101,8 @@ export const api = {
   approveHandoff: (id: string, title: string, body: string, graded: boolean) =>
     request<Handoff>(`/handoffs/${id}/approve`, { title, body, graded }),
   cancelHandoff: (id: string) => request<Handoff>(`/handoffs/${id}/cancel`, {}),
+  unreadReplies: () => request<Record<string, number>>("/handoffs/unread"),
+  markRepliesSeen: (id: string) => request<void>(`/handoffs/${id}/seen`, {}),
+  forumAccount: () => request<ForumAccount>("/forum/account"),
+  disconnectForum: () => request<void>("/forum/account/disconnect", {}),
 };
