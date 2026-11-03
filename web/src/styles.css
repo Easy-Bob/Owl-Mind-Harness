@@ -333,6 +333,64 @@ textarea:focus-visible {
   border-radius: 6px;
 }
 
+.forum-replies {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.forum-replies li {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+.forum-replies li.forum-answer {
+  border-width: 2px;
+}
+
+.forum-reply-meta {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.forum-new,
+.unread-badge {
+  font-weight: 600;
+}
+
+.unread-badge {
+  margin-left: 8px;
+  font-size: 12px;
+}
+
+.forum-account {
+  padding: 8px 0;
+  font-size: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.forum-account p {
+  margin: 4px 0;
+}
+
+.forum-account-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.forum-account button {
+  padding: 2px 8px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
 /* Admin mode */
 
 .with-mode-switch {

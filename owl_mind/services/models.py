@@ -19,7 +19,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import BYTEA, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -159,12 +159,58 @@ class Handoff(Base):
     attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    posted_as: Mapped[str | None] = mapped_column(Text)
 
 
 class ForumPost(Base):
+    """A posted discussion, and when it is next checked for replies."""
+
     __tablename__ = "forum_posts"
+    __table_args__ = (
+        Index("ix_forum_posts_due", "next_poll_at", postgresql_where=text("state = 'open'")),
+    )
 
     handoff_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("handoffs.id"), primary_key=True)
     url: Mapped[str] = mapped_column(Text)
     node_id: Mapped[str] = mapped_column(Text)
     posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    state: Mapped[str] = mapped_column(Text, server_default=text("'open'"))
+    next_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failures: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ForumReply(Base):
+    """Someone else's text from the forum. Shown to the student, never given to an agent."""
+
+    __tablename__ = "forum_replies"
+    __table_args__ = (Index("ix_forum_replies_handoff", "handoff_id"),)
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    handoff_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("forum_posts.handoff_id", ondelete="CASCADE")
+    )
+    author: Mapped[str] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    is_answer: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    seen: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    saved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ForumAccount(Base):
+    """A connected GitHub account. Both tokens are encrypted by the app."""
+
+    __tablename__ = "forum_accounts"
+
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), primary_key=True
+    )
+    github_login: Mapped[str] = mapped_column(Text)
+    access_token: Mapped[bytes] = mapped_column(BYTEA)
+    refresh_token: Mapped[bytes | None] = mapped_column(BYTEA)
+    access_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refresh_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    needs_reconnect: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

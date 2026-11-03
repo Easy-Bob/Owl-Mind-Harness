@@ -231,6 +231,31 @@ test("asking for a tutor shows a draft that is posted only after approval", asyn
   await expect(page.getByRole("region", { name: "Forum post" })).toContainText("Posted to the forum");
 });
 
+test("a forum reply shows on its session with a badge, and its HTML doesn't run", async ({ page }) => {
+  await signUp(page);
+  await send(page, "I want to talk to a TA about heaps");
+  const card = page.getByRole("region", { name: "Forum post draft" });
+  await expect(card).toContainText("Posts as the Owl-Mind bot.");
+  const approved = page.waitForResponse((response) => response.url().includes("/approve"));
+  await card.getByRole("button", { name: "Approve and post" }).click();
+  const handoffId = (await (await approved).json()).id;
+  await expect(page.getByRole("region", { name: "Forum post" })).toContainText("Posted to the forum");
+
+  execFileSync("uv", ["run", "python", "-m", "tests.e2e_seed_reply", handoffId], { cwd: repoRoot, env });
+  await page.reload();
+
+  const session = sessions(page).first().getByRole("button");
+  await expect(session).toContainText("1 new");
+  await session.click();
+  const replies = page.getByRole("list", { name: "Forum replies" });
+  await expect(replies).toContainText("ta_jane");
+  await expect(replies).toContainText("Accepted answer");
+  await expect(replies.locator("strong").filter({ hasText: "queue" })).toBeVisible();
+  await expect(replies.locator("img, script")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as { pwned?: boolean }).pwned)).toBeUndefined();
+  await expect(session).not.toContainText("new");
+});
+
 test("a double click on Send starts one run", async ({ page }) => {
   await signUp(page);
   const starts: string[] = [];

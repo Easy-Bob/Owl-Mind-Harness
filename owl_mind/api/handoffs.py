@@ -43,8 +43,31 @@ def _home(services: Services) -> str | None:
 
 @router.get("")
 async def for_thread(thread_id: uuid.UUID, user: User, services: ServicesDep) -> list[dict]:
-    handoffs = await _service(services).store.for_thread(user.id, thread_id)
-    return [public(handoff, _home(services)) for handoff in handoffs]
+    service = _service(services)
+    handoffs = await service.store.for_thread(user.id, thread_id)
+    replies = await service.store.replies_for(user.id, [handoff.id for handoff in handoffs])
+    post_as = await service.post_as(user.id)
+    return [
+        public(
+            handoff,
+            _home(services),
+            post_as,
+            [reply for reply in replies if reply.handoff_id == handoff.id],
+        )
+        for handoff in handoffs
+    ]
+
+
+@router.get("/unread")
+async def unread(user: User, services: ServicesDep) -> dict[str, int]:
+    """New forum replies per thread, for the badge in the session list."""
+    counts = await _service(services).store.unread_counts(user.id)
+    return {str(thread_id): count for thread_id, count in counts.items()}
+
+
+@router.post("/{handoff_id}/seen", status_code=204)
+async def seen(handoff_id: uuid.UUID, user: User, services: ServicesDep) -> None:
+    await _service(services).store.mark_seen(user.id, handoff_id)
 
 
 @router.post("/{handoff_id}/approve")
@@ -57,7 +80,10 @@ async def approve(handoff_id: uuid.UUID, body: ApproveIn, user: User, services: 
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Draft not found") from exc
     except NeedsReview as review:
-        return JSONResponse(status_code=409, content=public(review.handoff, _home(services)))
+        post_as = await service.post_as(user.id)
+        return JSONResponse(
+            status_code=409, content=public(review.handoff, _home(services), post_as)
+        )
     except HandoffError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return public(handoff, _home(services))

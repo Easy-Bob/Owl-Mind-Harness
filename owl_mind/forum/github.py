@@ -6,6 +6,7 @@ Only three operations exist here, so nothing else in GitHub's API can be reached
 import asyncio
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -19,6 +20,14 @@ _TOKEN_MARGIN_SECONDS = 300
 
 class ForumUnavailable(Exception):
     """GitHub couldn't be reached or refused the request."""
+
+
+class ForumAuthFailed(ForumUnavailable):
+    """GitHub refused the token. For a student's own token, they need to reconnect."""
+
+
+class DiscussionGone(Exception):
+    """The discussion was deleted, or the app can no longer see it."""
 
 
 @dataclass(frozen=True)
@@ -36,9 +45,18 @@ class SimilarPost:
 @dataclass(frozen=True)
 class Reply:
     id: str
+    author: str
     body: str
-    created_at: str
+    created_at: datetime
     is_answer: bool
+
+
+@dataclass(frozen=True)
+class Replies:
+    replies: list[Reply]
+    # False when GitHub has more comments than one request returns, so a missing comment
+    # may just be on a later page rather than deleted.
+    complete: bool
 
 
 @runtime_checkable
@@ -48,9 +66,11 @@ class Forum(Protocol):
 
     async def search_similar(self, text: str, limit: int = 3) -> list[SimilarPost]: ...
 
-    async def post_question(self, category: str, title: str, body: str) -> ForumPost: ...
+    async def post_question(
+        self, category: str, title: str, body: str, user_token: str | None = None
+    ) -> ForumPost: ...
 
-    async def get_replies(self, node_id: str) -> list[Reply]: ...
+    async def get_replies(self, node_id: str) -> Replies: ...
 
 
 _REPOSITORY = """
@@ -83,7 +103,13 @@ query($id: ID!) {
   node(id: $id) {
     ... on Discussion {
       answer { id }
-      comments(first: 100) { nodes { id body createdAt } }
+      comments(first: 50) {
+        totalCount
+        nodes {
+          id body createdAt author { login }
+          replies(first: 20) { totalCount nodes { id body createdAt author { login } } }
+        }
+      }
     }
   }
 }
@@ -130,6 +156,8 @@ class GitHubForum:
             response = await self._client.request(method, url, headers=headers, **kwargs)
         except httpx.HTTPError as exc:
             raise ForumUnavailable(type(exc).__name__) from exc
+        if response.status_code == 401:
+            raise ForumAuthFailed("GitHub refused the token")
         if response.status_code >= 400:
             raise ForumUnavailable(f"GitHub answered {response.status_code}")
         return response.json()
@@ -149,13 +177,17 @@ class GitHubForum:
             self._token = (granted["token"], time.time() + 3600)
             return self._token[0]
 
-    async def _graphql(self, document: str, **variables) -> dict[str, Any]:
-        token = await self._installation_token()
+    async def _graphql(
+        self, document: str, user_token: str | None = None, **variables
+    ) -> dict[str, Any]:
+        """Runs as the app, or as a student when given their own token."""
+        auth = f"Bearer {user_token}" if user_token else f"token {await self._installation_token()}"
         data = await self._request(
-            "POST", "/graphql", f"token {token}", json={"query": document, "variables": variables}
+            "POST", "/graphql", auth, json={"query": document, "variables": variables}
         )
         if data.get("errors"):
-            raise ForumUnavailable("GitHub refused the request")
+            kinds = {error.get("type") for error in data["errors"]}
+            raise ForumUnavailable(f"GitHub refused the request: {sorted(map(str, kinds))}")
         return data["data"]
 
     async def _repository_ids(self) -> tuple[str, dict[str, str]]:
@@ -172,20 +204,49 @@ class GitHubForum:
         data = await self._graphql(_SEARCH, query=query, limit=limit)
         return [SimilarPost(n["title"], n["url"]) for n in data["search"]["nodes"] if n]
 
-    async def post_question(self, category: str, title: str, body: str) -> ForumPost:
+    async def post_question(
+        self, category: str, title: str, body: str, user_token: str | None = None
+    ) -> ForumPost:
         repository_id, categories = await self._repository_ids()
         if category not in categories:
             raise ForumUnavailable(f"No category named {category}")
         data = await self._graphql(
-            _CREATE, repository=repository_id, category=categories[category], title=title, body=body
+            _CREATE,
+            user_token,
+            repository=repository_id,
+            category=categories[category],
+            title=title,
+            body=body,
         )
         discussion = data["createDiscussion"]["discussion"]
         return ForumPost(url=discussion["url"], node_id=discussion["id"])
 
-    async def get_replies(self, node_id: str) -> list[Reply]:
-        node = (await self._graphql(_REPLIES, id=node_id))["node"] or {}
+    async def get_replies(self, node_id: str) -> Replies:
+        try:
+            node = (await self._graphql(_REPLIES, id=node_id))["node"]
+        except ForumAuthFailed:
+            raise
+        except ForumUnavailable as exc:
+            # GitHub reports a deleted node as an error with NOT_FOUND.
+            if "NOT_FOUND" in str(exc):
+                raise DiscussionGone from exc
+            raise
+        if not node:
+            raise DiscussionGone
         answer = (node.get("answer") or {}).get("id")
-        return [
-            Reply(c["id"], c["body"], c["createdAt"], c["id"] == answer)
-            for c in node.get("comments", {}).get("nodes", [])
-        ]
+        comments = node["comments"]
+        complete = comments["totalCount"] <= len(comments["nodes"])
+        replies = []
+        for comment in comments["nodes"]:
+            replies.append(_reply(comment, answer))
+            nested = comment.get("replies") or {"totalCount": 0, "nodes": []}
+            complete = complete and nested["totalCount"] <= len(nested["nodes"])
+            replies.extend(_reply(child, answer) for child in nested["nodes"])
+        return Replies(replies, complete)
+
+
+def _reply(comment: dict[str, Any], answer: str | None) -> Reply:
+    # A deleted GitHub user shows as no author.
+    author = (comment.get("author") or {}).get("login") or "ghost"
+    created = datetime.fromisoformat(comment["createdAt"].replace("Z", "+00:00"))
+    return Reply(comment["id"], author, comment["body"], created, comment["id"] == answer)

@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { api, ApiError, type Handoff, type SimilarPost } from "../shared/api";
+import { ForumReplies, postAsLabel } from "./ForumReplies";
 
 type Props = {
   handoff: Handoff;
@@ -57,9 +58,10 @@ export function HandoffCard({ handoff, similar, onChange, onFailure }: Props) {
     return (
       <section className="handoff" aria-label="Forum post">
         <p>
-          Posted to the forum: <a href={handoff.url ?? "#"}>{handoff.title}</a>. A tutor will answer
-          there.
+          Posted to the forum as {postAsLabel(handoff.post_as)}:{" "}
+          <a href={handoff.url ?? "#"}>{handoff.title}</a>. Replies show here, and on the forum.
         </p>
+        <ForumReplies replies={handoff.replies ?? []} />
       </section>
     );
   }
@@ -95,6 +97,7 @@ export function HandoffCard({ handoff, similar, onChange, onFailure }: Props) {
         Nothing is posted until you approve. Once posted, the question stays on the forum, where
         course staff and other students can read it.
       </p>
+      <p className="handoff-note">Posts as {postAsLabel(handoff.post_as)}.</p>
       {similar.length > 0 && (
         <div className="handoff-similar">
           <p>Similar questions already on the forum:</p>

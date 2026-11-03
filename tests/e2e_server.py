@@ -20,8 +20,9 @@ from owl_mind.core.intent.classifier import IntentStep
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.persistence import open_persistence
 from owl_mind.core.runtime import Services
-from owl_mind.forum.github import ForumPost, SimilarPost
-from owl_mind.forum.handoff import HandoffService, PostgresHandoffStore
+from owl_mind.forum.github import ForumPost, Replies, SimilarPost
+from owl_mind.forum.handoff import HandoffService
+from owl_mind.forum.store import PostgresHandoffStore
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
 from owl_mind.services.admin_store import PostgresAdminStore
 from owl_mind.services.models import sqlalchemy_url
@@ -89,12 +90,14 @@ class LocalForum:
     async def search_similar(self, text: str, limit: int = 3) -> list[SimilarPost]:
         return [SimilarPost("An older question", f"{self.home_url}/1")]
 
-    async def post_question(self, category: str, title: str, body: str) -> ForumPost:
+    async def post_question(
+        self, category: str, title: str, body: str, user_token: str | None = None
+    ) -> ForumPost:
         self.posts.append((title, body))
         return ForumPost(f"{self.home_url}/{len(self.posts)}", f"D_{len(self.posts)}")
 
-    async def get_replies(self, node_id: str) -> list:
-        return []
+    async def get_replies(self, node_id: str) -> Replies:
+        return Replies([], True)
 
 
 @asynccontextmanager

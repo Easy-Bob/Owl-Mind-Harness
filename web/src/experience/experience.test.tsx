@@ -496,3 +496,154 @@ describe("HandoffCard", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("10 minutes");
   });
 });
+
+describe("Forum replies and accounts", () => {
+  const thread = { id: "t1", title: "BFS question", created_at: "2026-11-01T00:00:00Z" };
+  const posted = {
+    id: "h1",
+    status: "posted",
+    title: "Help with BFS",
+    body: "b",
+    graded: false,
+    url: "https://github.com/owner/forum/discussions/5",
+    forum_url: "https://github.com/owner/forum/discussions",
+    post_as: "student-gh",
+    replies: [
+      {
+        id: "C1",
+        author: "ta_jane",
+        body: "Use a **queue**. <img src=x onerror=alert(1)>",
+        created_at: "2026-11-02T13:00:00Z",
+        is_answer: true,
+        new: true,
+      },
+      {
+        id: "C2",
+        author: "classmate",
+        body: "Same problem here",
+        created_at: "2026-11-02T13:05:00Z",
+        is_answer: false,
+        new: false,
+      },
+    ],
+  };
+
+  function withThread(routes: Record<string, Reply | ((body: unknown) => Reply)> = {}) {
+    return fakeServer({
+      ...loggedIn,
+      "GET /threads": { body: [thread] },
+      "GET /threads/t1/messages": { body: [] },
+      "GET /handoffs?thread_id=t1": { body: [posted] },
+      "GET /handoffs/unread": { body: { t1: 1 } },
+      "POST /handoffs/h1/seen": { status: 204 },
+      ...routes,
+    });
+  }
+
+  it("marks a session with new replies", async () => {
+    withThread();
+    render(<App />);
+
+    expect(await screen.findByText("1 new")).toBeVisible();
+  });
+
+  it("shows replies safely on the posted card, marks the answer, then marks them seen", async () => {
+    const calls = withThread();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /BFS question/ }));
+    const replies = await screen.findByRole("list", { name: "Forum replies" });
+
+    expect(replies).toHaveTextContent("ta_jane");
+    expect(replies).toHaveTextContent("Accepted answer");
+    expect(replies.querySelector("strong")).toHaveTextContent("Accepted answer");
+    expect(replies.querySelectorAll("img, script")).toHaveLength(0);
+    expect(screen.getByText(/Posted to the forum as student-gh/)).toBeVisible();
+    await waitFor(() =>
+      expect(calls.some((call) => call.key === "POST /handoffs/h1/seen")).toBe(true),
+    );
+    await waitFor(() => expect(screen.queryByText("1 new")).toBeNull());
+  });
+
+  it("says who a draft will post as", async () => {
+    withThread({
+      "GET /handoffs?thread_id=t1": {
+        body: [{ ...posted, status: "draft", url: null, post_as: "bot", replies: [] }],
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /BFS question/ }));
+
+    expect(await screen.findByText("Posts as the Owl-Mind bot.")).toBeVisible();
+  });
+
+  it("hides the account control when the server doesn't offer it", async () => {
+    fakeServer({ ...loggedIn, "GET /forum/account": { body: { available: false } } });
+    render(<App />);
+    await screen.findByLabelText("Your message");
+
+    expect(screen.queryByText(/Connect your GitHub account/)).toBeNull();
+  });
+
+  it("offers to connect a GitHub account", async () => {
+    fakeServer({
+      ...loggedIn,
+      "GET /forum/account": {
+        body: { available: true, connected: false, login: null, needs_reconnect: false },
+      },
+    });
+    render(<App />);
+
+    const link = await screen.findByRole("link", { name: "Connect your GitHub account" });
+    expect(link).toHaveAttribute("href", "/forum/account/connect");
+    expect(screen.getByText("Forum posts use the Owl-Mind bot.")).toBeVisible();
+  });
+
+  it("shows a broken connection and disconnects it", async () => {
+    let connected = true;
+    const calls = fakeServer({
+      ...loggedIn,
+      "GET /forum/account": () => ({
+        body: {
+          available: true,
+          connected,
+          login: connected ? "student-gh" : null,
+          needs_reconnect: connected,
+        },
+      }),
+      "POST /forum/account/disconnect": () => {
+        connected = false;
+        return { status: 204 };
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("stopped working");
+    expect(screen.getByRole("link", { name: "Reconnect" })).toHaveAttribute(
+      "href",
+      "/forum/account/connect",
+    );
+    await user.click(screen.getByRole("button", { name: "Disconnect" }));
+
+    expect(await screen.findByText("Forum posts use the Owl-Mind bot.")).toBeVisible();
+    expect(calls.filter((call) => call.key === "POST /forum/account/disconnect")).toHaveLength(1);
+  });
+
+  it("reports the result of connecting, once", async () => {
+    window.history.replaceState(null, "", "/?forum=connected");
+    fakeServer({
+      ...loggedIn,
+      "GET /forum/account": {
+        body: { available: true, connected: true, login: "student-gh", needs_reconnect: false },
+      },
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("status")).toHaveTextContent("is connected");
+    expect(window.location.search).toBe("");
+  });
+});
