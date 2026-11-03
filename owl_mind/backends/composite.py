@@ -11,7 +11,6 @@ from deepagents.backends.protocol import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MATERIALS_DIR = REPO_ROOT / "materials"
 SKILLS_DIR = REPO_ROOT / "skills"
 SKILL_SOURCES = ["/skills/"]
 
@@ -44,13 +43,11 @@ def _student_namespace(area: str):
     return namespace
 
 
-def build_backend(
-    materials_dir: Path = MATERIALS_DIR, skills_dir: Path = SKILLS_DIR
-) -> CompositeBackend:
+def build_backend(skills_dir: Path = SKILLS_DIR) -> CompositeBackend:
+    """Course materials aren't files here: tutors search them in Postgres with materials_search."""
     return CompositeBackend(
         default=StateBackend(),
         routes={
-            "/materials/": ReadOnlyFilesystemBackend(root_dir=materials_dir, virtual_mode=True),
             "/skills/": ReadOnlyFilesystemBackend(root_dir=skills_dir, virtual_mode=True),
             "/memories/": StoreBackend(namespace=_student_namespace("memories")),
             "/reviews/": StoreBackend(namespace=_student_namespace("reviews")),

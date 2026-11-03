@@ -27,8 +27,8 @@ def _rules(
 ORCHESTRATOR_PERMISSIONS = _rules(read=("/memories", "/skills"), write=("/scratch",))
 
 TUTOR_PERMISSIONS: dict[Subagent, list[FilesystemPermission]] = {
-    Subagent.CONCEPT_TUTOR: _rules(read=("/materials", "/skills")),
-    Subagent.PRACTICE_COACH: _rules(read=("/materials", "/skills")),
+    Subagent.CONCEPT_TUTOR: _rules(read=("/skills",)),
+    Subagent.PRACTICE_COACH: _rules(read=("/skills",)),
     Subagent.STUDY_PLANNER: _rules(read=("/memories", "/skills")),
-    Subagent.QUIZ_MASTER: _rules(read=("/materials", "/skills"), write=("/scratch/quiz",)),
+    Subagent.QUIZ_MASTER: _rules(read=("/skills",), write=("/scratch/quiz",)),
 }
