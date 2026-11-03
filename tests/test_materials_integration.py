@@ -43,6 +43,22 @@ def migrated():
     )
 
 
+@pytest.fixture(autouse=True)
+def own_documents_only():
+    """Each test starts and ends with none of the test uploader's documents, so earlier runs
+    can't crowd results, and a local database keeps only real course files."""
+
+    def delete():
+        with psycopg.connect(get_settings().database_url) as connection:
+            connection.execute(
+                "DELETE FROM materials.documents WHERE uploaded_by = %s", (UPLOADER,)
+            )
+
+    delete()
+    yield
+    delete()
+
+
 @asynccontextmanager
 async def postgres_store():
     engine = create_async_engine(sqlalchemy_url(get_settings().database_url))
