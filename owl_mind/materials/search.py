@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from typing import Protocol, runtime_checkable
@@ -62,6 +63,17 @@ class SearchResult:
     text: str
     score: float
     source_url: str | None
+
+
+@dataclass(frozen=True)
+class SearchStats:
+    """What a search did, for the Admin timeline. Never the query or any text."""
+
+    result_count: int
+    top_score: float | None
+    corpus_version: int | None
+    cache_hit: bool
+    latency_ms: int
 
 
 @dataclass(frozen=True)
@@ -125,25 +137,42 @@ class MaterialsSearch:
         self._cache = cache
 
     async def search(self, query: str, limit: int = 5) -> list[SearchResult]:
+        results, _ = await self.search_with_stats(query, limit)
+        return results
+
+    async def search_with_stats(
+        self, query: str, limit: int = 5
+    ) -> tuple[list[SearchResult], SearchStats]:
+        started = time.monotonic()
         query = " ".join(query.split())
         limit = max(1, min(MAX_RESULTS, limit))
         if not query:
-            return []
-        key = _cache_key(await self._store.corpus_version(), query.lower(), limit)
+            return [], SearchStats(0, None, None, False, 0)
+        version = await self._store.corpus_version()
+        key = _cache_key(version, query.lower(), limit)
         try:
             cached = await self._cache.get(key)
         except Exception:
             cached = None  # A cache outage only costs speed.
         if cached is not None:
-            return [SearchResult(**item) for item in json.loads(cached)]
-        # Embedding is CPU work, so it runs off the event loop.
-        [vector] = await asyncio.to_thread(self._embedder.embed, [query])
-        results = await self._query(query, vector, limit)
-        try:
-            await self._cache.set(key, json.dumps([asdict(r) for r in results]), _CACHE_SECONDS)
-        except Exception:
-            pass
-        return results
+            results = [SearchResult(**item) for item in json.loads(cached)]
+        else:
+            # Embedding is CPU work, so it runs off the event loop.
+            [vector] = await asyncio.to_thread(self._embedder.embed, [query])
+            results = await self._query(query, vector, limit)
+            try:
+                payload = json.dumps([asdict(r) for r in results])
+                await self._cache.set(key, payload, _CACHE_SECONDS)
+            except Exception:
+                pass
+        stats = SearchStats(
+            result_count=len(results),
+            top_score=results[0].score if results else None,
+            corpus_version=version,
+            cache_hit=cached is not None,
+            latency_ms=round((time.monotonic() - started) * 1000),
+        )
+        return results, stats
 
     async def _query(self, query: str, vector: list[float], limit: int) -> list[SearchResult]:
         async with self._sessions() as session:

@@ -78,12 +78,19 @@ class HandoffService:
         category: str,
         accounts: ForumAccounts | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        events: Any = None,
     ) -> None:
         self.store = store
         self.forum = forum
         self.category = category
         self.accounts = accounts
         self._clock = clock
+        # A RunEventLog. Steps are recorded on the run that made the draft, as metadata only.
+        self.events = events
+
+    async def _record(self, handoff: Handoff, step: str, **data: Any) -> None:
+        if self.events is not None:
+            await self.events.record(handoff.run_id, "handoff", {"step": step, **data})
 
     async def _author(self, student_id: uuid.UUID) -> tuple[str, str] | None:
         """The student's own token and login, or None for the bot. Never silently the bot when
@@ -150,25 +157,33 @@ class HandoffService:
         title = " ".join(title.split())
         if not title or not body.strip():
             raise HandoffError("A post needs a title and some text.")
-        clean_title, clean_body, _ = prepare(title, body, graded, known_values)
+        clean_title, clean_body, removed = prepare(title, body, graded, known_values)
         if (clean_title, clean_body) != (title, body):
             # Redaction changed what the student approved, so they must see the new text first.
             revised = replace(handoff, title=clean_title, body=clean_body, graded=graded)
             await self.store.save(revised)
+            await self._record(handoff, "needs_review", removed=removed)
             raise NeedsReview(revised)
         last = await self.store.last_posted_at(student_id)
         if last is not None and self._clock() - last < POST_INTERVAL:
+            await self._record(handoff, "rate_limited")
             raise HandoffError("You can post once every 10 minutes. Try again shortly.")
-        author = await self._author(student_id)
+        try:
+            author = await self._author(student_id)
+        except HandoffError:
+            await self._record(handoff, "reconnect_needed")
+            raise
         await self.store.save(replace(handoff, title=title, body=body, graded=graded))
         if not await self.store.claim(handoff_id, "draft", "posting"):
             raise HandoffError("This draft was already sent or cancelled.")
+        await self._record(handoff, "approved", graded=graded)
         return await self._post(await self.store.get(student_id, handoff_id), author)
 
     async def _post(self, handoff: Handoff, author: tuple[str, str] | None) -> Handoff:
         if self.forum is None:
             failed = replace(handoff, status="fallback", attempts=handoff.attempts + 1)
             await self.store.save(failed)
+            await self._record(handoff, "fallback", reason="no_forum")
             return failed
         token, login = author if author else (None, "bot")
         try:
@@ -184,12 +199,16 @@ class HandoffService:
             # The student's token was refused. Give the draft back rather than post as the bot.
             await self.accounts.mark_broken(handoff.student_id)
             await self.store.save(replace(handoff, status="draft"))
+            await self._record(handoff, "reconnect_needed")
             raise HandoffError(RECONNECT_MESSAGE) from None
         except ForumUnavailable:
             attempts = handoff.attempts + 1
             status = "retrying" if attempts < MAX_RETRIES else "fallback"
             failed = replace(handoff, status=status, attempts=attempts)
             await self.store.save(failed)
+            await self._record(handoff, "post_failed", attempts=attempts, status=status)
+            if status == "fallback":
+                await self._record(handoff, "fallback", reason="retries_used")
             return failed
         posted = replace(
             handoff,
@@ -200,6 +219,9 @@ class HandoffService:
         )
         await self.store.save(posted)
         await self.store.record_post(handoff.id, post.url, post.node_id, self._clock())
+        # The forum URL is public on the forum. The GitHub login isn't recorded, only its kind.
+        posted_as = "bot" if login == "bot" else "student"
+        await self._record(handoff, "posted", url=post.url, posted_as=posted_as)
         return posted
 
     async def retry_pending(self) -> int:
@@ -214,6 +236,7 @@ class HandoffService:
                 except HandoffError:
                     # Nobody is waiting to read the message, so give the copyable text instead.
                     await self.store.save(replace(handoff, status="fallback"))
+                    await self._record(handoff, "fallback", reason="reconnect_needed")
                 retried += 1
         return retried
 
@@ -223,6 +246,7 @@ class HandoffService:
             raise LookupError
         if not await self.store.claim(handoff_id, "draft", "cancelled"):
             raise HandoffError("Only a draft can be cancelled.")
+        await self._record(handoff, "cancelled")
         return replace(handoff, status="cancelled")
 
 

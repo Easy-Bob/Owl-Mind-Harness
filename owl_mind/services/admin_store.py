@@ -1,5 +1,6 @@
 """Read-only Admin data. Message text never leaves here, and that includes thread titles."""
 
+import re
 import uuid
 from typing import Any, Protocol, runtime_checkable
 
@@ -14,13 +15,78 @@ _SAFE_EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     "subagent_end": ("status",),
     "usage": ("input_tokens", "output_tokens", "model_calls"),
     "done": ("status", "reason"),
+    "retrieval": ("result_count", "top_score", "corpus_version", "cache_hit", "latency_ms"),
 }
+
+# Handoff events are checked value by value, because any free text could be a student's.
+_HANDOFF_STEPS = {
+    "drafted",
+    "similar_found",
+    "improved",
+    "improve_failed",
+    "improve_limit",
+    "needs_review",
+    "approved",
+    "rate_limited",
+    "reconnect_needed",
+    "cancelled",
+    "posted",
+    "post_failed",
+    "fallback",
+    "replies_arrived",
+    "poll_failed",
+    "polling_stopped",
+}
+_REDACTION_KINDS = {"email", "secret", "student id", "netid", "phone", "name", "known detail"}
+_HANDOFF_WORDS = {
+    "status": {"retrying", "fallback"},
+    "reason": {
+        "no_forum",
+        "retries_used",
+        "reconnect_needed",
+        "discussion_gone",
+        "window_ended",
+    },
+    "posted_as": {"bot", "student"},
+}
+_HANDOFF_NUMBERS = ("count", "attempts", "remaining", "failures")
+_FORUM_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/discussions/\d+")
+
+
+def _safe_handoff(payload: dict[str, Any]) -> dict[str, Any]:
+    step = payload.get("step")
+    if step not in _HANDOFF_STEPS:
+        return {}
+    safe: dict[str, Any] = {"step": step}
+    removed = payload.get("removed")
+    if isinstance(removed, dict):
+        # Counts by kind only, never what was removed.
+        safe["removed"] = {
+            kind: count
+            for kind, count in removed.items()
+            if kind in _REDACTION_KINDS and isinstance(count, int) and not isinstance(count, bool)
+        }
+    for name in _HANDOFF_NUMBERS:
+        value = payload.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            safe[name] = value
+    for name, allowed in _HANDOFF_WORDS.items():
+        if payload.get(name) in allowed:
+            safe[name] = payload[name]
+    if isinstance(payload.get("graded"), bool):
+        safe["graded"] = payload["graded"]
+    url = payload.get("url")
+    if step == "posted" and isinstance(url, str) and _FORUM_URL.fullmatch(url):
+        safe["url"] = url
+    return safe
+
 
 _RUNS = """
 FROM app.runs r
 JOIN app.threads t ON t.id = r.thread_id
 JOIN app.students s ON s.id = t.student_id
 WHERE (:query = '' OR s.email ILIKE '%' || :query || '%' OR r.id::text = :query)
+    AND (:route = '' OR r.route = :route)
 """
 
 _LIST = f"""
@@ -30,7 +96,11 @@ SELECT r.id, s.email, r.status, r.route, r.task_kind, r.created_at,
         AS tokens,
     (SELECT sum(m.cost_usd) FROM ops.model_calls m WHERE m.run_id = r.id) AS cost_usd,
     (SELECT count(*) FROM ops.model_calls m WHERE m.run_id = r.id AND NOT m.usage_complete)
-        AS unknown_usage
+        AS unknown_usage,
+    EXISTS (SELECT 1 FROM app.run_events e WHERE e.run_id = r.id AND e.kind = 'retrieval')
+        AS searched,
+    (SELECT e.payload ->> 'step' FROM app.run_events e
+        WHERE e.run_id = r.id AND e.kind = 'handoff' ORDER BY e.key DESC LIMIT 1) AS handoff_step
 {_RUNS}
 ORDER BY r.created_at DESC, r.id
 LIMIT :limit OFFSET :offset
@@ -95,6 +165,8 @@ GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10
 
 
 def safe_event(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if kind == "handoff":
+        return _safe_handoff(payload)
     if kind == "todo_delta":
         return {"count": len(payload.get("todos", []))}
     if kind == "usage":
@@ -120,7 +192,9 @@ def _clean(row: Any) -> dict[str, Any]:
 
 @runtime_checkable
 class AdminStore(Protocol):
-    async def list_requests(self, query: str, page: int, size: int) -> dict[str, Any]: ...
+    async def list_requests(
+        self, query: str, page: int, size: int, route: str = ""
+    ) -> dict[str, Any]: ...
 
     async def get_request(self, run_id: uuid.UUID, viewer_id: uuid.UUID) -> dict[str, Any] | None:
         """Return one run's timeline, and record that this viewer opened it."""
@@ -132,14 +206,22 @@ class PostgresAdminStore:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
-    async def list_requests(self, query: str, page: int, size: int) -> dict[str, Any]:
-        params = {"query": query.strip(), "limit": size, "offset": (page - 1) * size}
+    async def list_requests(
+        self, query: str, page: int, size: int, route: str = ""
+    ) -> dict[str, Any]:
+        filters = {"query": query.strip(), "route": route}
+        params = {**filters, "limit": size, "offset": (page - 1) * size}
         async with self._sessions() as session:
             rows = (await session.execute(text(_LIST), params)).all()
-            total = await session.scalar(
-                text(f"SELECT count(*) {_RUNS}"), {"query": params["query"]}
-            )
-        return {"items": [_clean(row) for row in rows], "total": total, "page": page, "size": size}
+            total = await session.scalar(text(f"SELECT count(*) {_RUNS}"), filters)
+        items = []
+        for row in rows:
+            item = _clean(row)
+            # The step comes from stored data, so only known step names are passed on.
+            if item["handoff_step"] not in _HANDOFF_STEPS:
+                item["handoff_step"] = None
+            items.append(item)
+        return {"items": items, "total": total, "page": page, "size": size, "route": route}
 
     async def get_request(self, run_id: uuid.UUID, viewer_id: uuid.UUID) -> dict[str, Any] | None:
         params = {"run_id": run_id}

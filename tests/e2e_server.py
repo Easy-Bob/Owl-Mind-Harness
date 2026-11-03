@@ -26,6 +26,7 @@ from owl_mind.forum.store import PostgresHandoffStore
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
 from owl_mind.services.admin_store import PostgresAdminStore
 from owl_mind.services.models import sqlalchemy_url
+from owl_mind.services.run_events import RunEventLog
 from owl_mind.services.run_store import PostgresRunStore
 from owl_mind.services.study_store import PostgresStudyStore
 from tests.fake_deepseek import USAGE, FakeDeepSeek, _chunk, completion
@@ -82,7 +83,8 @@ def _line(chunk: dict) -> bytes:
 class LocalForum:
     """Stands in for GitHub, so a browser test can never post to the real forum."""
 
-    home_url = "http://127.0.0.1:4173/forum"
+    # Shaped like GitHub's, because Admin shows only GitHub discussion links.
+    home_url = "https://github.com/e2e-owner/e2e-forum/discussions"
 
     def __init__(self) -> None:
         self.posts: list[tuple[str, str]] = []
@@ -113,20 +115,23 @@ async def _services():
     engine = create_async_engine(sqlalchemy_url(settings.database_url))
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     client = Redis.from_url(settings.redis_url, socket_timeout=15)
+    runs = PostgresRunStore(sessions)
     try:
         async with open_persistence(settings.database_url) as persistence:
             yield Services(
                 admin=PostgresAdminStore(sessions),
                 accounts=PostgresAccountStore(sessions),
                 limiter=RedisLoginLimiter(client),
-                runs=PostgresRunStore(sessions),
+                runs=runs,
                 study=PostgresStudyStore(sessions),
                 events=RedisEventBus(client),
                 store=persistence.store,
                 checkpointer=persistence.checkpointer,
                 intent=IntentStep(lambda tier, c, m: get_model(tier, component=c, max_tokens=m)),
                 get_model=get_model,
-                handoffs=HandoffService(PostgresHandoffStore(sessions), LocalForum(), "Q&A"),
+                handoffs=HandoffService(
+                    PostgresHandoffStore(sessions), LocalForum(), "Q&A", events=RunEventLog(runs)
+                ),
             )
     finally:
         await client.aclose()

@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { adminApi, type GroupRow, type ModelCallSummary, type RequestDetail, type RequestPage, type RunRow } from "./adminApi";
+import {
+  adminApi,
+  ROUTES,
+  type GroupRow,
+  type ModelCallSummary,
+  type RequestDetail,
+  type RequestPage,
+  type RunRow,
+} from "./adminApi";
 
 // Null means the provider or the run didn't report it. It must never read as 0.
 const unknown = "unknown";
@@ -9,10 +17,46 @@ const time = (value: string) => new Date(value).toLocaleString("en-US");
 const label = (value: string | null | undefined) => value ?? unknown;
 
 const PAGE_SIZE = 25;
+const words = (value: string) => value.replaceAll("_", " ");
+
+// Events hold counts, IDs and statuses only. The server has already dropped anything else.
+function describe(kind: string, data: Record<string, unknown>) {
+  if (kind === "retrieval") {
+    const score = data.top_score == null ? "no results" : `top score ${data.top_score}`;
+    return `${data.result_count} results, ${score}, corpus version ${data.corpus_version}, ${
+      data.cache_hit ? "cache hit" : "no cache hit"
+    }, ${data.latency_ms} ms`;
+  }
+  if (kind === "handoff" && typeof data.step === "string") {
+    const removed = data.removed as Record<string, number> | undefined;
+    const details = [
+      ...Object.entries(removed ?? {}).map(([what, n]) => `${n} ${what} removed`),
+      ...Object.entries(data)
+        .filter(([key]) => !["step", "removed", "url"].includes(key))
+        .map(([key, value]) => `${words(key)}: ${typeof value === "string" ? words(value) : value}`),
+    ];
+    return (
+      <>
+        {words(data.step)}
+        {details.length > 0 && `: ${details.join(", ")}`}
+        {typeof data.url === "string" && (
+          <>
+            {" "}
+            <a href={data.url}>forum post</a>
+          </>
+        )}
+      </>
+    );
+  }
+  return Object.entries(data)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(", ");
+}
 
 function RequestsPage() {
   const [query, setQuery] = useState("");
   const [applied, setApplied] = useState("");
+  const [route, setRoute] = useState("");
   const [page, setPage] = useState(1);
   const [data, setData] = useState<RequestPage | null>(null);
   const [detail, setDetail] = useState<RequestDetail | null>(null);
@@ -20,10 +64,10 @@ function RequestsPage() {
 
   const load = useCallback(() => {
     adminApi
-      .requests(applied, page, PAGE_SIZE)
+      .requests(applied, page, PAGE_SIZE, route)
       .then(setData)
       .catch((caught: Error) => setError(caught.message));
-  }, [applied, page]);
+  }, [applied, page, route]);
 
   useEffect(load, [load]);
 
@@ -54,6 +98,22 @@ function RequestsPage() {
         <label htmlFor="request-search">Search by email or run ID</label>
         <input id="request-search" value={query} onChange={(event) => setQuery(event.target.value)} />
         <button type="submit">Search</button>
+        <label htmlFor="request-route">Route</label>
+        <select
+          id="request-route"
+          value={route}
+          onChange={(event) => {
+            setPage(1);
+            setRoute(event.target.value);
+          }}
+        >
+          <option value="">All routes</option>
+          {ROUTES.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
       </form>
       {error && (
         <p className="error" role="alert">
@@ -72,6 +132,7 @@ function RequestsPage() {
                   <th>Route</th>
                   <th>Kind</th>
                   <th>Status</th>
+                  <th>Steps</th>
                   <th>Model calls</th>
                   <th>Tokens</th>
                   <th>Cost</th>
@@ -88,6 +149,7 @@ function RequestsPage() {
                     <td>{label(run.route)}</td>
                     <td>{run.task_kind ?? "none"}</td>
                     <td>{run.status}</td>
+                    <td>{steps(run)}</td>
                     <td>{run.model_calls}</td>
                     <td>{usageCell(count(run.tokens), run.unknown_usage)}</td>
                     <td>{usageCell(run.model_calls ? usd(run.cost_usd) : "$0", run.unknown_usage)}</td>
@@ -116,6 +178,14 @@ function RequestsPage() {
       )}
     </section>
   );
+}
+
+function steps(run: RunRow) {
+  const parts = [
+    ...(run.searched ? ["searched"] : []),
+    ...(run.handoff_step ? [`handoff: ${words(run.handoff_step)}`] : []),
+  ];
+  return parts.length > 0 ? parts.join(", ") : "none";
 }
 
 function usageCell(value: string, unknownUsage: number) {
@@ -186,10 +256,7 @@ function RequestTimeline({ detail, onBack }: { detail: RequestDetail; onBack: ()
         <ol className="timeline">
           {detail.events.map((event, index) => (
             <li key={index}>
-              <strong>{event.kind}</strong>{" "}
-              {Object.entries(event.data)
-                .map(([key, value]) => `${key}: ${value}`)
-                .join(", ")}
+              <strong>{event.kind}</strong> {describe(event.kind, event.data)}
             </li>
           ))}
         </ol>

@@ -1,6 +1,7 @@
 """What a tool knows about the turn. The model can't set any of this through a tool argument."""
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -15,3 +16,5 @@ class RunContext:
     today: date
     # MaterialsSearch, or None where there are no materials, such as in some tests.
     search: Any = None
+    # Records a metadata-only event on the run, for the Admin timeline. Never fails a tool.
+    record: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None

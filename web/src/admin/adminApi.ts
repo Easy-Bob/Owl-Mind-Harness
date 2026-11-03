@@ -11,7 +11,11 @@ export type RunRow = {
   tokens: number | null;
   cost_usd: number | null;
   unknown_usage: number;
+  searched: boolean;
+  handoff_step: string | null;
 };
+
+export const ROUTES = ["rule", "template", "orchestrated", "handoff"] as const;
 
 export type RequestPage = { items: RunRow[]; total: number; page: number; size: number };
 
@@ -60,9 +64,9 @@ export type ModelCallSummary = {
 };
 
 export const adminApi = {
-  requests: (query: string, page: number, size: number) =>
+  requests: (query: string, page: number, size: number, route = "") =>
     request<RequestPage>(
-      `/admin/requests?${new URLSearchParams({ q: query, page: String(page), size: String(size) })}`,
+      `/admin/requests?${new URLSearchParams({ q: query, page: String(page), size: String(size), route })}`,
     ),
   request: (runId: string) => request<RequestDetail>(`/admin/requests/${runId}`),
   modelCalls: (days: number) => request<ModelCallSummary>(`/admin/model-calls?days=${days}`),

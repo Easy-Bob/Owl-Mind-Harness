@@ -39,6 +39,7 @@ from owl_mind.materials.store import PostgresMaterialsStore
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
 from owl_mind.services.admin_store import PostgresAdminStore
 from owl_mind.services.models import sqlalchemy_url
+from owl_mind.services.run_events import RunEventLog
 from owl_mind.services.run_store import PostgresRunStore
 from owl_mind.services.study_store import PostgresStudyStore
 
@@ -75,7 +76,10 @@ def _forum_accounts(settings, sessions) -> ForumAccounts | None:
 async def _forum_jobs(services: Services) -> None:
     """Retries approved posts and checks posts for replies. Moves to workers in M4-B."""
     forum = services.handoffs.forum
-    poller = ReplyPoller(services.handoffs.store, forum) if forum is not None else None
+    handoffs = services.handoffs
+    poller = (
+        ReplyPoller(handoffs.store, forum, events=handoffs.events) if forum is not None else None
+    )
     while True:
         await asyncio.sleep(_HANDOFF_RETRY_SECONDS)
         try:
@@ -99,8 +103,14 @@ async def _production_services() -> AsyncIterator[Services]:
     search = MaterialsSearch(sessions, materials_store, embedder, RedisSearchCache(client))
     forum = _forum(settings)
     forum_accounts = _forum_accounts(settings, sessions)
+    runs = PostgresRunStore(sessions)
+    events = RunEventLog(runs)
     handoffs = HandoffService(
-        PostgresHandoffStore(sessions), forum, settings.forum_category, forum_accounts
+        PostgresHandoffStore(sessions),
+        forum,
+        settings.forum_category,
+        forum_accounts,
+        events=events,
     )
     try:
         async with open_persistence(settings.database_url) as persistence:
@@ -108,7 +118,7 @@ async def _production_services() -> AsyncIterator[Services]:
                 admin=PostgresAdminStore(sessions),
                 accounts=PostgresAccountStore(sessions),
                 limiter=RedisLoginLimiter(client),
-                runs=PostgresRunStore(sessions),
+                runs=runs,
                 study=PostgresStudyStore(sessions),
                 events=RedisEventBus(client),
                 store=persistence.store,
@@ -119,7 +129,7 @@ async def _production_services() -> AsyncIterator[Services]:
                 handoffs=handoffs,
                 forum_accounts=forum_accounts,
                 # Only with a model key: without one, the button is hidden.
-                improver=Improver(handoffs.store, get_chat_model)
+                improver=Improver(handoffs.store, get_chat_model, events)
                 if settings.deepseek_api_key
                 else None,
             )

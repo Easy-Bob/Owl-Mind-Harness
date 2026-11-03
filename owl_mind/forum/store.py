@@ -41,6 +41,8 @@ class TrackedPost:
     node_id: str
     posted_at: datetime
     failures: int
+    # The run that made the draft, so later steps appear on its Admin timeline.
+    run_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -196,7 +198,10 @@ class InMemoryHandoffStore:
         )[:limit]
         for _, post in due:
             post.lease_until = now + lease
-        return [TrackedPost(i, p.node_id, p.posted_at, p.failures) for i, p in due]
+        return [
+            TrackedPost(i, p.node_id, p.posted_at, p.failures, self.handoffs[i].run_id)
+            for i, p in due
+        ]
 
     async def save_replies(self, handoff_id, replies, complete, next_poll_at) -> int:
         new = 0
@@ -279,7 +284,8 @@ WHERE handoff_id IN (
     LIMIT :limit
     FOR UPDATE SKIP LOCKED
 )
-RETURNING handoff_id, node_id, posted_at, failures
+RETURNING handoff_id, node_id, posted_at, failures,
+    (SELECT run_id FROM app.handoffs h WHERE h.id = forum_posts.handoff_id) AS run_id
 """
 _UPSERT_REPLY = """
 INSERT INTO app.forum_replies (id, handoff_id, author, body, created_at, is_answer)

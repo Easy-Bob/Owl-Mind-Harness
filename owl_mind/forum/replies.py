@@ -7,6 +7,7 @@ never added to an agent's messages, so they can't steer an agent and cost no tok
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from owl_mind.forum.github import DiscussionGone, Forum, ForumUnavailable
 from owl_mind.forum.store import HandoffStore, TrackedPost
@@ -38,10 +39,16 @@ class ReplyPoller:
         store: HandoffStore,
         forum: Forum,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        events: Any = None,
     ) -> None:
         self.store = store
         self.forum = forum
         self._clock = clock
+        self.events = events
+
+    async def _record(self, post: TrackedPost, step: str, **data: Any) -> None:
+        if self.events is not None:
+            await self.events.record(post.run_id, "handoff", {"step": step, **data})
 
     async def poll_due(self) -> int:
         """Check every post that is due. Returns how many new replies were saved."""
@@ -55,6 +62,7 @@ class ReplyPoller:
             result = await self.forum.get_replies(post.node_id)
         except DiscussionGone:
             await self.store.discussion_gone(post.handoff_id)
+            await self._record(post, "polling_stopped", reason="discussion_gone")
             return 0
         except ForumUnavailable as exc:
             # GitHub's rate limit also lands here, so failures wait longer each time.
@@ -62,6 +70,14 @@ class ReplyPoller:
             logger.warning("Forum reply check failed: %s", type(exc).__name__)
             when = next_poll(post.posted_at, self._clock(), retry_delay(failures))
             await self.store.poll_failed(post.handoff_id, failures, when)
+            await self._record(post, "poll_failed", failures=failures)
+            if when is None:
+                await self._record(post, "polling_stopped", reason="window_ended")
             return 0
         when = next_poll(post.posted_at, self._clock())
-        return await self.store.save_replies(post.handoff_id, result.replies, result.complete, when)
+        new = await self.store.save_replies(post.handoff_id, result.replies, result.complete, when)
+        if new:
+            await self._record(post, "replies_arrived", count=new)
+        if when is None:
+            await self._record(post, "polling_stopped", reason="window_ended")
+        return new
