@@ -7,7 +7,7 @@ Only the orchestrator's text reaches the student: a tutor's text is its report t
 from dataclasses import dataclass, field
 from typing import Any
 
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 FLUSH_CHARS = 24
 STREAM_MODES = ["messages", "updates"]
@@ -23,7 +23,12 @@ class StreamTranslator:
     usage: dict[str, int] = field(
         default_factory=lambda: {"input_tokens": 0, "output_tokens": 0, "model_calls": 0}
     )
+    # Hold the orchestrator's text until its call ends, and drop it if the call handed out work.
+    # For a joined answer, where every orchestrator call only delegates and code writes the
+    # answer, so anything it says on the way would reach the student as a stray preamble.
+    hold_until_answer: bool = False
     _buffer: str = ""
+    _held: str = ""
 
     def flush(self) -> list[tuple[str, dict[str, Any]]]:
         if not self._buffer:
@@ -39,13 +44,17 @@ class StreamTranslator:
         return []
 
     def _message(self, namespace, message, metadata) -> list[tuple[str, dict[str, Any]]]:
+        # Pieces of a streamed reply, or a whole message made in code, such as a joined answer.
         is_answer_text = (
             not namespace
-            and isinstance(message, AIMessageChunk)
+            and isinstance(message, AIMessage)
             and metadata.get("langgraph_node") == "model"
             and isinstance(message.content, str)
         )
         if not is_answer_text:
+            return []
+        if self.hold_until_answer:
+            self._held += message.content
             return []
         self._buffer += message.content
         return self.flush() if len(self._buffer) >= FLUSH_CHARS else []
@@ -67,6 +76,11 @@ class StreamTranslator:
         for message in _messages(update):
             if not isinstance(message, AIMessage):
                 continue
+            if not namespace and self.hold_until_answer:
+                held, self._held = self._held, ""
+                if not message.tool_calls:
+                    self._buffer += held
+                    events += self.flush()
             usage = message.usage_metadata or {}
             self.usage["input_tokens"] += usage.get("input_tokens", 0)
             self.usage["output_tokens"] += usage.get("output_tokens", 0)

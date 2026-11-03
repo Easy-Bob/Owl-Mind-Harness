@@ -236,11 +236,19 @@ def check_handoff_model_calls(root: Path) -> list[Violation]:
     return found
 
 
-REQUIRED_CHECKS = ("ToolErrorMiddleware", "ToolArgumentMiddleware", "ContextMiddleware")
+REQUIRED_CHECKS = (
+    "BudgetMiddleware",
+    "ToolErrorMiddleware",
+    "ResultCapMiddleware",
+    "ToolArgumentMiddleware",
+    "ContextMiddleware",
+    "BudgetedSummarization",
+)
 
 
 def check_agent_middleware(built: dict) -> list[Violation]:
-    """Every agent the factory builds has the M3-A checks, and the orchestrator caps fan-out.
+    """Every agent the factory builds has the M3-A and M3-E checks, and the orchestrator caps
+    fan-out. The budget check comes first, then tool errors, which are caught around the rest.
 
     built is what the factory passed to create_deep_agent.
     """
@@ -249,13 +257,18 @@ def check_agent_middleware(built: dict) -> list[Violation]:
         (spec["name"], spec.get("middleware", []), False) for spec in built.get("subagents", [])
     ]
     for name, middleware, is_orchestrator in agents:
-        present = [type(m).__name__ for m in middleware]
+        # Joining answers makes no call and no tool call, so it may sit outside every check.
+        present = [
+            type(m).__name__ for m in middleware if type(m).__name__ != "JoinAnswerMiddleware"
+        ]
         required = [*REQUIRED_CHECKS, *(["FanOutMiddleware"] if is_orchestrator else [])]
         for check in required:
             if check not in present:
                 found.append(Violation("agent-middleware", name, 0, f"missing {check}"))
-        if present[:1] != ["ToolErrorMiddleware"]:
-            found.append(Violation("agent-middleware", name, 0, "tool errors aren't outermost"))
+        if present[:2] != ["BudgetMiddleware", "ToolErrorMiddleware"]:
+            found.append(
+                Violation("agent-middleware", name, 0, "budget and tool errors aren't outermost")
+            )
     return found
 
 

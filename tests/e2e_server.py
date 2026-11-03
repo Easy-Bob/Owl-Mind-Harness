@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from owl_mind.api.app import create_app
+from owl_mind.core.budget import RedisBudgetLedger
 from owl_mind.core.config import get_settings
 from owl_mind.core.events import RedisEventBus
 from owl_mind.core.intent.classifier import IntentStep
@@ -129,6 +130,7 @@ async def _services():
                 checkpointer=persistence.checkpointer,
                 intent=IntentStep(lambda tier, c, m: get_model(tier, component=c, max_tokens=m)),
                 get_model=get_model,
+                budgets=RedisBudgetLedger(client),
                 handoffs=HandoffService(
                     PostgresHandoffStore(sessions), LocalForum(), "Q&A", events=RunEventLog(runs)
                 ),

@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from owl_mind.api.app import create_app
 from owl_mind.api.deps import current_student
 from owl_mind.core import telemetry
+from owl_mind.core.budget import RedisBudgetLedger
 from owl_mind.core.config import get_settings
 from owl_mind.core.events import InMemoryEventBus, RedisEventBus
 from owl_mind.core.intent.classifier import IntentStep
@@ -138,6 +139,53 @@ def test_one_unfinished_run_per_thread(runs):
             return await store.create_run(thread.id)
 
     assert in_loop(body)
+
+
+def test_one_unfinished_run_per_student_across_threads(runs):
+    alice, bob = new_student(), new_student()
+
+    async def body():
+        async with runs() as store:
+            first_thread = await store.create_thread(alice, "t1")
+            second_thread = await store.create_thread(alice, "t2")
+            first = await store.create_run(first_thread.id)
+            with pytest.raises(ActiveRunExists):
+                await store.create_run(second_thread.id)
+            # Another student is never blocked by Alice.
+            await store.create_run((await store.create_thread(bob, "t")).id)
+            await store.set_run_status(first, "completed")
+            return await store.create_run(second_thread.id)
+
+    assert in_loop(body)
+
+
+def test_two_runs_started_at_once_for_one_student_leave_one(runs):
+    alice = new_student()
+
+    async def body():
+        async with runs() as store:
+            threads = [await store.create_thread(alice, f"t{n}") for n in range(2)]
+            return await asyncio.gather(
+                *[store.create_run(t.id) for t in threads], return_exceptions=True
+            )
+
+    results = in_loop(body)
+    assert sum(isinstance(r, ActiveRunExists) for r in results) == 1
+
+
+def test_an_empty_thread_can_be_removed_but_one_with_runs_is_kept(runs):
+    alice = new_student()
+
+    async def body():
+        async with runs() as store:
+            empty = await store.create_thread(alice, "empty")
+            used = await store.create_thread(alice, "used")
+            await store.create_run(used.id)
+            await store.delete_empty_thread(empty.id)
+            await store.delete_empty_thread(used.id)
+            return [t.title for t in await store.list_threads(alice)]
+
+    assert in_loop(body) == ["used"]
 
 
 def test_run_is_scoped_to_one_student(runs):
@@ -282,6 +330,7 @@ class RealWorld:
                         lambda tier, c, m: get_model(tier, component=c, max_tokens=m)
                     ),
                     get_model=get_model,
+                    budgets=RedisBudgetLedger(client),
                 )
             await client.aclose()
             await engine.dispose()

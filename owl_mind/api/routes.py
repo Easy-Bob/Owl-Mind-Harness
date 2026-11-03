@@ -42,6 +42,10 @@ def _start(http: Request, services: Services, run: RunRequest) -> None:
     task.add_done_callback(tasks.discard)
 
 
+# One answer at a time per student, in any chat, so a second tab can't double what they spend.
+_BUSY = "An answer is still being written. Wait for it to finish, then send this again."
+
+
 async def _queue_run(
     http: Request, services: Services, student: uuid.UUID, thread_id: uuid.UUID, message: str
 ) -> uuid.UUID:
@@ -61,7 +65,12 @@ async def start_thread(
     if not body.message.strip():
         raise HTTPException(status_code=422, detail="A new chat needs a first message")
     thread = await services.runs.create_thread(student, _title(body.message))
-    run_id = await _queue_run(http, services, student, thread.id, body.message)
+    try:
+        run_id = await _queue_run(http, services, student, thread.id, body.message)
+    except ActiveRunExists as exc:
+        # No empty chat is left behind in the student's list.
+        await services.runs.delete_empty_thread(thread.id)
+        raise HTTPException(status_code=409, detail=_BUSY) from exc
     await asyncio.to_thread(record_activity, "session_started", student, thread.id)
     await asyncio.to_thread(record_activity, "message_sent", student, thread.id)
     return RunStarted(thread_id=thread.id, run_id=run_id)
@@ -82,7 +91,7 @@ async def send_message(
     try:
         run_id = await _queue_run(http, services, student, thread_id, body.message)
     except ActiveRunExists as exc:
-        raise HTTPException(status_code=409, detail="A run is already active") from exc
+        raise HTTPException(status_code=409, detail=_BUSY) from exc
     await asyncio.to_thread(record_activity, "message_sent", student, thread_id)
     return RunStarted(thread_id=thread_id, run_id=run_id)
 

@@ -259,6 +259,7 @@ describe("Admin mode", () => {
             at: "2026-11-02T00:00:04Z",
             data: { step: "posted", url: "https://github.com/o/f/discussions/3", posted_as: "bot" },
           },
+          { kind: "budget_step", at: "2026-11-02T00:00:05Z", data: { step: "wind_down", percent: 72 } },
         ],
       },
     });
@@ -273,6 +274,7 @@ describe("Admin mode", () => {
     expect(items).toContain("handoff drafted: 2 email removed");
     expect(items).toContain("handoff post failed: attempts: 1, status: retrying");
     expect(items).toContain("handoff posted: posted as: bot forum post");
+    expect(items).toContain("budget_step wind down at 72% of the run's token budget");
     expect(screen.getByRole("link", { name: "forum post" })).toHaveAttribute(
       "href",
       "https://github.com/o/f/discussions/3",

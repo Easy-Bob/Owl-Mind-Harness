@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -17,7 +17,7 @@ FINISHED = ("completed", "failed", "stopped")
 
 
 class ActiveRunExists(Exception):
-    """This thread already has a run in progress."""
+    """This student already has a run in progress, in this thread or another."""
 
 
 @dataclass(frozen=True)
@@ -46,7 +46,10 @@ class RunStore(Protocol):
         """Return None if the thread is not this student's."""
 
     async def create_run(self, thread_id: uuid.UUID) -> uuid.UUID:
-        """Raise ActiveRunExists if the thread has an unfinished run."""
+        """Raise ActiveRunExists if the thread's student has an unfinished run anywhere."""
+
+    async def delete_empty_thread(self, thread_id: uuid.UUID) -> None:
+        """Remove a thread that never got a run, such as one refused for a run elsewhere."""
 
     async def get_run(self, student_id: uuid.UUID, run_id: uuid.UUID) -> RunInfo | None:
         """Return None if the run is not this student's."""
@@ -85,11 +88,17 @@ class InMemoryRunStore:
         return info if owner == student_id else None
 
     async def create_run(self, thread_id: uuid.UUID) -> uuid.UUID:
-        if any(r.thread_id == thread_id and r.status in UNFINISHED for r in self.runs.values()):
+        student = self.threads[thread_id][0]
+        busy = {self.threads[r.thread_id][0] for r in self.runs.values() if r.status in UNFINISHED}
+        if student in busy:
             raise ActiveRunExists
         run_id = uuid.uuid4()
         self.runs[run_id] = RunInfo(run_id, thread_id, "queued")
         return run_id
+
+    async def delete_empty_thread(self, thread_id: uuid.UUID) -> None:
+        if not any(r.thread_id == thread_id for r in self.runs.values()):
+            self.threads.pop(thread_id, None)
 
     async def get_run(self, student_id: uuid.UUID, run_id: uuid.UUID) -> RunInfo | None:
         run = self.runs.get(run_id)
@@ -145,14 +154,24 @@ class PostgresRunStore:
         return ThreadInfo(row.id, row.title, row.created_at)
 
     async def create_run(self, thread_id: uuid.UUID) -> uuid.UUID:
-        row = Run(id=uuid.uuid4(), thread_id=thread_id, status="queued")
         try:
             async with self._sessions.begin() as session:
+                student = await session.scalar(
+                    select(Thread.student_id).where(Thread.id == thread_id)
+                )
+                row = Run(id=uuid.uuid4(), thread_id=thread_id, student_id=student, status="queued")
                 session.add(row)
         except IntegrityError as exc:
-            # A partial unique index allows one unfinished run per thread, even across processes.
+            # Partial unique indexes allow one unfinished run per thread and per student, even
+            # across processes.
             raise ActiveRunExists from exc
         return row.id
+
+    async def delete_empty_thread(self, thread_id: uuid.UUID) -> None:
+        async with self._sessions.begin() as session:
+            has_runs = await session.scalar(select(Run.id).where(Run.thread_id == thread_id))
+            if has_runs is None:
+                await session.execute(delete(Thread).where(Thread.id == thread_id))
 
     async def get_run(self, student_id: uuid.UUID, run_id: uuid.UUID) -> RunInfo | None:
         statement = (

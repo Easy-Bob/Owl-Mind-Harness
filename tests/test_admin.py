@@ -329,11 +329,11 @@ def test_message_set_holds_no_prompt_examples():
     assert not examples.intersection(measure_calls.MESSAGES)
 
 
-def test_script_refuses_to_run_live_before_m3e(monkeypatch):
+def test_script_refuses_to_run_while_live_runs_are_off(monkeypatch):
     monkeypatch.delenv("LIVE_AGENT_RUNS_ENABLED", raising=False)
     get_settings.cache_clear()
 
-    with pytest.raises(SystemExit, match="M3-E"):
+    with pytest.raises(SystemExit, match="LIVE_AGENT_RUNS_ENABLED is off"):
         measure_calls.main()
 
 

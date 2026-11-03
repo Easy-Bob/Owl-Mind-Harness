@@ -194,9 +194,10 @@ class SearchRun(Run):
         from langgraph.store.memory import InMemoryStore
 
         from owl_mind.core.factory import build_owl_agent
+        from tests.budget_helpers import meter
 
         agent = build_owl_agent(
-            task_kind, subagents, store=InMemoryStore(), get_model=self.get_model
+            task_kind, subagents, store=InMemoryStore(), meter=meter(), get_model=self.get_model
         )
         context = RunContext(student_id=ALICE, store=self.store, today=TODAY, search=self.search)
         return asyncio.run(agent.ainvoke({"messages": [HumanMessage(message)]}, context=context))

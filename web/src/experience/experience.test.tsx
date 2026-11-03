@@ -353,7 +353,7 @@ describe("App", () => {
       ...loggedIn,
       "GET /threads": { body: [{ id: "t1", title: "busy", created_at: "2026-11-01T00:00:00Z" }] },
       "GET /threads/t1/messages": { body: [] },
-      "POST /threads/t1/messages": { status: 409, body: { detail: "A run is already active" } },
+      "POST /threads/t1/messages": { status: 409, body: { detail: "An answer is still being written. Wait for it to finish, then send this again." } },
     });
     const user = userEvent.setup();
     render(<App />);
@@ -361,7 +361,7 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "busy" }));
     await user.type(screen.getByLabelText("Your message"), "again{Enter}");
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("A run is already active");
+    expect(await screen.findByRole("alert")).toHaveTextContent("An answer is still being written. Wait for it to finish, then send this again.");
   });
 
   it("returns to login if the session ends", async () => {

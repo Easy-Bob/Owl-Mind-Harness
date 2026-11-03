@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +21,13 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     intent_layer3_enabled: bool = False
     live_agent_runs_enabled: bool = False
+    # From the M3-E baseline: about 40 learn turns or 8 composite ones a day. Run budgets are in
+    # core/limits.py.
+    student_daily_tokens: int = 1_000_000
+    global_daily_usd: float = 2.0
+    # How a two-tutor answer is made: "join" puts the tutors' replies together in code, and
+    # "rewrite" has the orchestrator write a new answer from them. Compared in M4-D.
+    composite_answer: Literal["join", "rewrite"] = "join"
     jwt_secret: SecretStr | None = None
     cookie_secure: bool = True
     configured_admins: str = ""

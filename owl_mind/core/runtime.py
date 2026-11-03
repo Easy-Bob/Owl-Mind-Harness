@@ -15,11 +15,13 @@ from langgraph.graph import START, StateGraph
 from langgraph.store.base import BaseStore
 
 from owl_mind.core import replies, telemetry
+from owl_mind.core.budget import BudgetExceeded, BudgetStop, RunMeter
+from owl_mind.core.config import get_settings
 from owl_mind.core.events import EventBus
 from owl_mind.core.factory import LiveAgentRunsDisabled, build_owl_agent
 from owl_mind.core.intent.classifier import IntentResult, IntentStep
 from owl_mind.core.intent.followup import needs_earlier, previous_chat
-from owl_mind.core.intent.taxonomy import Reply, Route
+from owl_mind.core.intent.taxonomy import Reply, Route, TaskKind
 from owl_mind.core.limits import RUN_LIMITS, RunLimit  # noqa: F401  RunLimit is imported from here.
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.prompts import PROMPT_VERSION
@@ -51,6 +53,8 @@ class Services:
     handoffs: Any = None
     forum_accounts: Any = None
     improver: Any = None
+    # A BudgetLedger. Without one no agent runs, because budgets fail closed.
+    budgets: Any = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,16 @@ class RunRequest:
 class _RunStopped(Exception):
     def __init__(self, reason: str) -> None:
         self.reason = reason
+
+
+def _budget_stop(stop: BudgetStop) -> tuple[str, str]:
+    """The student's message and the recorded reason for a budget stop."""
+    scope = stop.scope if isinstance(stop, BudgetExceeded) else "unavailable"
+    if scope == "run":
+        return replies.RUN_STOPPED, "token_limit"
+    if scope == "student":
+        return replies.STUDENT_BUDGET, "student_budget"
+    return replies.AGENTS_PAUSED, f"{scope}_budget" if scope == "global" else "budget_unavailable"
 
 
 class _Emitter:
@@ -191,16 +205,20 @@ async def _run_agent(
     result: IntentResult,
     config: dict[str, Any],
     emit: _Emitter,
+    meter: RunMeter,
 ) -> None:
+    limit = RUN_LIMITS[result.task_kind]
+    meter.run_tokens = limit.tokens
     agent = build_owl_agent(
         result.task_kind,
         result.subagents,
         store=services.store,
+        meter=meter,
         checkpointer=services.checkpointer,
         get_model=services.get_model,
     )
-    limit = RUN_LIMITS[result.task_kind]
-    translator = StreamTranslator()
+    joins = result.task_kind is TaskKind.COMPOSITE and get_settings().composite_answer == "join"
+    translator = StreamTranslator(hold_until_answer=joins)
     context = RunContext(
         student_id=request.student_id,
         store=services.study,
@@ -237,24 +255,38 @@ async def _run_agent(
         await emit("text_delta", {"text": replies.left_out_note(result.left_out)})
 
 
+async def _classify(
+    services: Services, request: RunRequest, config: dict[str, Any], meter: RunMeter
+) -> tuple[IntentResult | None, BudgetStop | None]:
+    """With no budget left, only the rules run: a study question then gets no model call."""
+    try:
+        await meter.daily()
+    except BudgetStop as stop:
+        return services.intent.match(request.message), stop
+    earlier = await _earlier_for(services, request)
+    return await services.intent.classify(request.message, config=config, earlier=earlier), None
+
+
 async def execute_run(services: Services, request: RunRequest) -> None:
     emit = _Emitter(services, request.run_id)
+    meter = RunMeter(services.budgets, request.student_id, record=emit)
     config = {
         **_thread_config(request.thread_id),
         "metadata": {
             telemetry.RUN_ID_KEY: str(request.run_id),
             telemetry.PROMPT_VERSION_KEY: PROMPT_VERSION,
         },
+        "callbacks": [meter],
     }
     try:
         await services.runs.set_run_status(request.run_id, "running")
-        result = await services.intent.classify(
-            request.message, config=config, earlier=await _earlier_for(services, request)
-        )
+        result, closed = await _classify(services, request, config, meter)
+        if result is None or (closed and result.route is Route.ORCHESTRATED):
+            raise closed
         await services.runs.set_run_setup(request.run_id, result.route.value, _kind(result))
         if result.route is Route.ORCHESTRATED:
             try:
-                await _run_agent(services, request, result, config, emit)
+                await _run_agent(services, request, result, config, emit, meter)
             except LiveAgentRunsDisabled:
                 await _answer(services, request, replies.AGENTS_UNAVAILABLE, emit)
         else:
@@ -263,6 +295,10 @@ async def execute_run(services: Services, request: RunRequest) -> None:
     except _RunStopped as stopped:
         await emit("text_delta", {"text": replies.RUN_STOPPED})
         await _finish(services, request, "stopped", emit, "done", reason=stopped.reason)
+    except BudgetStop as stop:
+        text, reason = _budget_stop(stop)
+        await emit("text_delta", {"text": text})
+        await _finish(services, request, "stopped", emit, "done", reason=reason)
     except asyncio.CancelledError:
         await services.runs.set_run_status(request.run_id, "failed")
         raise

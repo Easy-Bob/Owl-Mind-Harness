@@ -3,17 +3,24 @@
 import json
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from owl_mind.core import factory
+from owl_mind.core.config import get_settings
+from owl_mind.core.factory import BudgetedSummarization
 from owl_mind.core.intent.taxonomy import Subagent, TaskKind
 from owl_mind.core.middleware import (
     ARGUMENT_CHARS,
     MAX_TASK_CALLS,
+    BudgetMiddleware,
     ContextMiddleware,
     FanOutMiddleware,
+    JoinAnswerMiddleware,
+    ResultCapMiddleware,
     ToolArgumentMiddleware,
     ToolErrorMiddleware,
 )
+from tests.budget_helpers import meter
 from tests.guard_rails import check_agent_middleware
 from tests.test_factory import Run, tool_results
 from tests.test_filesystem import call, say, task
@@ -67,7 +74,10 @@ def test_retries_on_one_tutor_cannot_use_up_the_other_tutors_call():
     assert results[3] == "quiz"
 
 
-def test_once_both_tutors_ran_the_spare_call_can_retry_either():
+def test_once_both_tutors_ran_the_spare_call_can_retry_either(monkeypatch):
+    # A joined answer is made as soon as both have replied, so retries need the rewrite mode.
+    monkeypatch.setenv("COMPOSITE_ANSWER", "rewrite")
+    get_settings.cache_clear()
     run = Run(
         task("concept_tutor"),
         say("explanation"),
@@ -197,7 +207,9 @@ def built_agents(monkeypatch, task_kind, subagents) -> dict:
         return object()
 
     monkeypatch.setattr(factory, "create_deep_agent", capture)
-    factory.build_owl_agent(task_kind, subagents, store=None, get_model=Run().get_model)
+    factory.build_owl_agent(
+        task_kind, subagents, store=None, meter=meter(), get_model=Run().get_model
+    )
     return captured
 
 
@@ -213,12 +225,18 @@ def test_every_agent_the_factory_builds_has_the_checks_in_order(monkeypatch, tas
     captured = built_agents(monkeypatch, task_kind, subagents)
 
     assert check_agent_middleware(captured) == []
-    orchestrator = [type(m) for m in captured["middleware"]][:4]
+    built = [type(m) for m in captured["middleware"]]
+    if task_kind is TaskKind.COMPOSITE:
+        assert built[0] is JoinAnswerMiddleware
+    orchestrator = [m for m in built if m is not JoinAnswerMiddleware][:7]
     assert orchestrator == [
+        BudgetMiddleware,
         ToolErrorMiddleware,
+        ResultCapMiddleware,
         ToolArgumentMiddleware,
         FanOutMiddleware,
         ContextMiddleware,
+        BudgetedSummarization,
     ]
 
 
@@ -245,3 +263,72 @@ def test_every_model_call_in_a_run_has_a_component(monkeypatch):
 
     assert len(events) == 3
     assert {event["component"] for event in events} == {"orchestrator", "agent:concept_tutor"}
+
+
+# -- joined two-tutor answers ------------------------------------------------
+
+COMPOSITE = [Subagent.CONCEPT_TUTOR, Subagent.QUIZ_MASTER]
+EXPLANATION = "A Bloom filter sets k bits per item [cite:a1b2]."
+QUIZ = "1. What does a set bit tell you?"
+
+
+def test_a_two_tutor_answer_is_the_replies_joined_with_no_rewrite_call():
+    run = Run(task("concept_tutor"), say(EXPLANATION), task("quiz_master"), say(QUIZ))
+
+    result = run.invoke(TaskKind.COMPOSITE, COMPOSITE)
+
+    expected = f"{EXPLANATION}\n\nNow let's check your understanding.\n\n{QUIZ}"
+    assert result["messages"][-1].content == expected
+    assert len(run.fake.requests) == 4  # Two orchestrator calls to delegate, one per tutor.
+
+
+def test_tutors_replies_join_in_the_intent_steps_order_whatever_order_they_ran():
+    run = Run(task("quiz_master"), say(QUIZ), task("concept_tutor"), say(EXPLANATION))
+
+    result = run.invoke(TaskKind.COMPOSITE, COMPOSITE)
+
+    assert result["messages"][-1].content.startswith(EXPLANATION)
+
+
+def test_the_rewrite_mode_has_the_orchestrator_write_the_answer(monkeypatch):
+    monkeypatch.setenv("COMPOSITE_ANSWER", "rewrite")
+    get_settings.cache_clear()
+    run = Run(
+        task("concept_tutor"), say(EXPLANATION), task("quiz_master"), say(QUIZ), say("rewritten")
+    )
+
+    result = run.invoke(TaskKind.COMPOSITE, COMPOSITE)
+
+    assert result["messages"][-1].content == "rewritten"
+    assert len(run.fake.requests) == 5
+
+
+def ask(call_id: str, tutor: str) -> AIMessage:
+    return AIMessage(
+        "", tool_calls=[{"id": call_id, "name": "task", "args": {"subagent_type": tutor}}]
+    )
+
+
+def reply(call_id: str, text: str, status: str = "success") -> ToolMessage:
+    return ToolMessage(text, tool_call_id=call_id, name="task", status=status)
+
+
+def test_a_failed_or_missing_tutor_reply_leaves_the_answer_to_the_orchestrator():
+    join = JoinAnswerMiddleware(("concept_tutor", "quiz_master"))
+    asked = [HumanMessage("help"), ask("1", "concept_tutor"), ask("2", "quiz_master")]
+
+    failed = [*asked, reply("1", EXPLANATION), reply("2", "quiz_master failed", "error")]
+    missing = [*asked, reply("1", EXPLANATION)]
+    retried = [*failed, ask("3", "quiz_master"), reply("3", QUIZ)]
+
+    assert join.joined(failed) is None
+    assert join.joined(missing) is None
+    assert join.joined(retried).endswith(QUIZ)
+
+
+def test_only_this_turns_replies_are_joined():
+    join = JoinAnswerMiddleware(("concept_tutor", "quiz_master"))
+    earlier = [HumanMessage("first"), ask("1", "concept_tutor"), reply("1", "old explanation")]
+    now = [HumanMessage("second"), ask("2", "quiz_master"), reply("2", QUIZ)]
+
+    assert join.joined([*earlier, *now]) is None

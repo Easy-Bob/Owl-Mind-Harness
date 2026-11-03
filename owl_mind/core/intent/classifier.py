@@ -154,10 +154,9 @@ class IntentStep:
         earlier: tuple[str, str] | None = None,
     ) -> IntentResult:
         """earlier is the previous chat, given only for a follow-up such as "quiz me on it"."""
-        match = match_rule(message)
-        if match is not None:
-            intents = (match.intent,) if match.intent else ()
-            return IntentResult(route=match.route, intents=intents, reply=match.reply)
+        settled = self.match(message)
+        if settled is not None:
+            return settled
 
         if earlier is not None:
             message = with_earlier(message, earlier)
@@ -169,6 +168,15 @@ class IntentStep:
 
         scored = await self._ask(ModelTier.LARGE, "intent:layer3", message, config)
         return build_result(scored, layer=3) if self._is_confident(scored) else _clarify(layer=3)
+
+    @staticmethod
+    def match(message: str) -> IntentResult | None:
+        """The rules alone, with no model call. None when they don't settle the message."""
+        match = match_rule(message)
+        if match is None:
+            return None
+        intents = (match.intent,) if match.intent else ()
+        return IntentResult(route=match.route, intents=intents, reply=match.reply)
 
     @staticmethod
     def _is_confident(scored: list[_Scored]) -> bool:
@@ -183,7 +191,11 @@ class IntentStep:
             async with asyncio.timeout(_TIMEOUT_SECONDS):
                 response = await model.ainvoke(
                     [SystemMessage(SYSTEM_PROMPT), HumanMessage(message)],
-                    config={"metadata": (config or {}).get("metadata", {})},
+                    # The callbacks carry the run's budget meter, so this call counts too.
+                    config={
+                        "metadata": (config or {}).get("metadata", {}),
+                        "callbacks": (config or {}).get("callbacks"),
+                    },
                 )
             return parse_reply(response.content)
         except ValueError as exc:

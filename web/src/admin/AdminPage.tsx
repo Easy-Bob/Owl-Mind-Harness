@@ -27,6 +27,9 @@ function describe(kind: string, data: Record<string, unknown>) {
       data.cache_hit ? "cache hit" : "no cache hit"
     }, ${data.latency_ms} ms`;
   }
+  if (kind === "budget_step" && typeof data.step === "string") {
+    return `${words(data.step)} at ${data.percent}% of the run's token budget`;
+  }
   if (kind === "handoff" && typeof data.step === "string") {
     const removed = data.removed as Record<string, number> | undefined;
     const details = [
