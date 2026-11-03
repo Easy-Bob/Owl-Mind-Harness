@@ -27,6 +27,7 @@ from owl_mind.forum.github import (
 from owl_mind.forum.handoff import MAX_RETRIES, HandoffService, known_values, summarize
 from owl_mind.forum.redact import escape_markdown, for_graded_problem, redact, trim_code
 from owl_mind.forum.store import InMemoryHandoffStore
+from owl_mind.services.run_events import RunEventLog
 from tests.test_auth import ALICE_EMAIL, logged_in
 from tests.test_auth import settings as auth_settings  # noqa: F401  Applied to every test.
 from tests.test_runtime import World, parse_sse
@@ -95,7 +96,10 @@ def handoff_world(forum: FakeForum | None, clock: Clock | None = None, accounts=
     world.app.dependency_overrides.clear()
     world.handoff_store = InMemoryHandoffStore()
     world.clock = clock or Clock()
-    service = HandoffService(world.handoff_store, forum, "Q&A", accounts, world.clock)
+    world.events = RunEventLog(world.runs, world.clock)
+    service = HandoffService(
+        world.handoff_store, forum, "Q&A", accounts, world.clock, events=world.events
+    )
     world.services = dataclasses.replace(world.services, handoffs=service, forum_accounts=accounts)
     return world
 

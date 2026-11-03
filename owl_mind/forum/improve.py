@@ -58,9 +58,12 @@ def _parse(text: str) -> tuple[str, str]:
 
 
 class Improver:
-    def __init__(self, store: HandoffStore, get_model: Callable[..., Any]) -> None:
+    def __init__(
+        self, store: HandoffStore, get_model: Callable[..., Any], events: Any = None
+    ) -> None:
         self.store = store
         self._get_model = get_model
+        self.events = events
         # One process until M4-B, so this is enough to make a double click one call.
         self._running: set[uuid.UUID] = set()
 
@@ -88,19 +91,31 @@ class Improver:
             clean_title, clean_body, _ = prepare(title, body, handoff.graded, known_values)
             used = await self.store.claim_improvement(handoff_id, MAX_IMPROVEMENTS)
             if used is None:
+                await self._record(handoff.run_id, "improve_limit")
                 raise HandoffError(f"A draft can be improved {MAX_IMPROVEMENTS} times at most.")
-            text = await self._ask(clean_title, clean_body, handoff.run_id)
+            try:
+                new_title, new_body = _parse(
+                    await self._ask(clean_title, clean_body, handoff.run_id)
+                )
+            except ImproveUnavailable:
+                await self._record(handoff.run_id, "improve_failed")
+                raise
         finally:
             self._running.discard(handoff_id)
-        new_title, new_body = _parse(text)
         # The model's text is checked like the student's: it could repeat or invent a detail.
         new_title, new_body, removed = prepare(new_title, new_body, handoff.graded, known_values)
+        remaining = MAX_IMPROVEMENTS - used
+        await self._record(handoff.run_id, "improved", removed=removed, remaining=remaining)
         return {
             "title": new_title,
             "body": new_body,
             "removed": removed,
-            "remaining": MAX_IMPROVEMENTS - used,
+            "remaining": remaining,
         }
+
+    async def _record(self, run_id: uuid.UUID | None, step: str, **data: Any) -> None:
+        if self.events is not None:
+            await self.events.record(run_id, "handoff", {"step": step, **data})
 
     async def _ask(self, title: str, body: str, run_id: uuid.UUID | None) -> str:
         draft = f"<draft>\nTitle: {title}\n\n{body}\n</draft>"

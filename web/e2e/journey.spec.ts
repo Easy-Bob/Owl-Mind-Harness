@@ -389,6 +389,43 @@ test("an admin sees a student's request, tokens and timeline, with no message te
   await studentContext.close();
 });
 
+test("an admin sees a handoff's steps and the post link, with none of the student's text", async ({ page, browser }) => {
+  const studentContext = await browser.newContext({ baseURL: "http://localhost:4174" });
+  const student = await studentContext.newPage();
+  await signUp(student);
+  const email = await student.getByRole("navigation", { name: "Sessions" }).getByText("@example.com").textContent();
+  const secret = `secret-draft-${randomUUID()}`;
+  await send(student, `I want to talk to a TA about ${secret}`);
+  const card = student.getByRole("region", { name: "Forum post draft" });
+  await expect(card.getByLabel("Post", { exact: true })).toHaveValue(new RegExp(secret));
+  await card.getByRole("button", { name: "Approve and post" }).click();
+  await expect(student.getByRole("region", { name: "Forum post" })).toContainText("Posted to the forum");
+
+  await page.request.post("/auth/signup", {
+    data: { email: adminEmail, password, invite_code: invite, accepted_notice: true },
+  });
+  await page.goto("/");
+  await page.getByLabel("Email").fill(adminEmail);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Log in" }).click();
+  await page.getByRole("button", { name: "Admin" }).click();
+  await page.getByLabel("Search by email or run ID").fill(email!);
+  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByLabel("Route").selectOption("handoff");
+
+  const rows = page.getByRole("row");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(1)).toContainText("handoff: posted");
+  await rows.nth(1).getByRole("button", { name: "Open" }).click();
+  const timeline = page.getByRole("list").last();
+  await expect(timeline).toContainText("handoff drafted");
+  await expect(timeline).toContainText("handoff approved");
+  await expect(timeline).toContainText("handoff posted: posted as: bot");
+  await expect(timeline.getByRole("link", { name: "forum post" })).toHaveAttribute("href", /\/discussions\/\d+$/);
+  await expect(page.locator("body")).not.toContainText(secret);
+  await studentContext.close();
+});
+
 test("a student is refused admin data even when asking directly", async ({ page }) => {
   await signUp(page);
   for (const path of ["/admin/requests", "/admin/model-calls", "/admin/me"]) {

@@ -63,7 +63,7 @@ def call_row(run_id, **overrides) -> dict:
 class Seed:
     """One student and one run with two model calls, one of them with unknown usage."""
 
-    def __init__(self) -> None:
+    def __init__(self, route: str = "orchestrated", extra_events: list | None = None) -> None:
         self.student, self.thread, self.run = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
         self.email = f"seed-{self.student.hex}@example.com"
         self.component = f"component-{self.student.hex[:8]}"
@@ -91,13 +91,14 @@ class Seed:
             )
             db.execute(
                 "INSERT INTO app.runs (id, thread_id, status, route, task_kind)"
-                " VALUES (%s, %s, 'completed', 'orchestrated', 'learn')",
-                (self.run, self.thread),
+                " VALUES (%s, %s, 'completed', %s, 'learn')",
+                (self.run, self.thread, route),
             )
             events = [
                 ("000001:tool_start", "tool_start", {"name": "build_hint", "args": "secret"}),
                 ("000002:todo_delta", "todo_delta", {"todos": [{"content": SECRET_TODO}]}),
                 ("000003:done", "done", {"status": "completed"}),
+                *(extra_events or []),
             ]
             for key, kind, payload in events:
                 db.execute(
@@ -291,3 +292,126 @@ def test_summary_window_leaves_out_older_calls():
 
 async def _both(store):
     return await store.model_call_summary(30), await store.model_call_summary(60)
+
+
+# -- retrieval and handoff events (M2-F) ------------------------------------
+
+SECRET_QUERY = "zqx-secret-query"
+SECRET_DRAFT = "zqx-secret-draft"
+SECRET_EMAIL = "zqx.secret@example.com"
+POST_URL = "https://github.com/owner/forum/discussions/12"
+
+RETRIEVAL = (
+    "000002:retrieval",
+    "retrieval",
+    {
+        "result_count": 3,
+        "top_score": 0.032,
+        "corpus_version": 7,
+        "cache_hit": True,
+        "latency_ms": 9,
+        "query": SECRET_QUERY,
+        "results": [{"text": SECRET_DRAFT}],
+    },
+)
+HANDOFF_EVENTS = [
+    (
+        "000002:handoff",
+        "handoff",
+        {"step": "drafted", "removed": {"email": 2, SECRET_EMAIL: 1}, "body": SECRET_DRAFT},
+    ),
+    ("t20261102T120000000000:handoff:a", "handoff", {"step": "approved", "graded": False}),
+    (
+        "t20261102T120001000000:handoff:b",
+        "handoff",
+        {"step": "post_failed", "attempts": 1, "status": "retrying", "error": SECRET_DRAFT},
+    ),
+    (
+        "t20261102T120100000000:handoff:c",
+        "handoff",
+        {"step": "posted", "url": POST_URL, "posted_as": "student", "login": "real-gh-name"},
+    ),
+    ("t20261102T130000000000:handoff:d", "handoff", {"step": "replies_arrived", "count": 2}),
+    ("t20261102T140000000000:handoff:e", "handoff", {"step": SECRET_DRAFT}),
+]
+
+
+def test_a_searching_run_shows_its_stats_and_nothing_it_searched_for():
+    seed = Seed(extra_events=[RETRIEVAL])
+
+    detail = with_store(lambda store: store.get_request(seed.run, uuid.uuid4()))
+    listed = with_store(lambda store: store.list_requests(seed.email, 1, 10))
+
+    [retrieval] = [event for event in detail["events"] if event["kind"] == "retrieval"]
+    assert retrieval["data"] == {
+        "result_count": 3,
+        "top_score": 0.032,
+        "corpus_version": 7,
+        "cache_hit": True,
+        "latency_ms": 9,
+    }
+    assert SECRET_QUERY not in str(detail) and SECRET_DRAFT not in str(detail)
+    assert listed["items"][0]["searched"] is True
+    assert listed["items"][0]["handoff_step"] is None
+
+
+def test_a_handoff_shows_each_step_in_order_with_counts_and_the_post_url():
+    seed = Seed(route="handoff", extra_events=HANDOFF_EVENTS)
+
+    detail = with_store(lambda store: store.get_request(seed.run, uuid.uuid4()))
+
+    steps = [event["data"] for event in detail["events"] if event["kind"] == "handoff"]
+    assert steps == [
+        {"step": "drafted", "removed": {"email": 2}},
+        {"step": "approved", "graded": False},
+        {"step": "post_failed", "attempts": 1, "status": "retrying"},
+        {"step": "posted", "url": POST_URL, "posted_as": "student"},
+        {"step": "replies_arrived", "count": 2},
+        {},
+    ]
+    kinds = [event["kind"] for event in detail["events"]]
+    assert kinds.index("done") < kinds.index("handoff", kinds.index("done"))
+    text = str(detail)
+    for secret in (SECRET_DRAFT, SECRET_EMAIL, "real-gh-name"):
+        assert secret not in text
+
+
+def test_the_route_filter_and_the_latest_handoff_step():
+    handoff = Seed(route="handoff", extra_events=HANDOFF_EVENTS)
+    other = Seed()
+
+    async def both(store):
+        return (
+            await store.list_requests("", 1, 100, "handoff"),
+            await store.list_requests("", 1, 100, "orchestrated"),
+        )
+
+    handoffs, orchestrated = with_store(both)
+
+    handoff_ids = {item["id"] for item in handoffs["items"]}
+    assert str(handoff.run) in handoff_ids and str(other.run) not in handoff_ids
+    assert {item["route"] for item in handoffs["items"]} == {"handoff"}
+    assert handoffs["total"] == len(handoffs["items"]) or handoffs["total"] > 100
+    [mine] = [item for item in handoffs["items"] if item["id"] == str(handoff.run)]
+    # The latest stored step is a made-up one, so the list shows none rather than its text.
+    assert mine["handoff_step"] is None
+    assert str(other.run) in {item["id"] for item in orchestrated["items"]}
+
+
+def test_old_runs_with_no_new_events_still_list_and_open():
+    seed = Seed()
+
+    detail = with_store(lambda store: store.get_request(seed.run, uuid.uuid4()))
+    listed = with_store(lambda store: store.list_requests(seed.email, 1, 10))
+
+    assert [event["kind"] for event in detail["events"]] == ["tool_start", "todo_delta", "done"]
+    assert listed["items"][0]["searched"] is False
+    assert listed["items"][0]["handoff_step"] is None
+
+
+def test_the_list_shows_a_known_latest_handoff_step():
+    seed = Seed(route="handoff", extra_events=HANDOFF_EVENTS[:-1])
+
+    listed = with_store(lambda store: store.list_requests(seed.email, 1, 10))
+
+    assert listed["items"][0]["handoff_step"] == "replies_arrived"

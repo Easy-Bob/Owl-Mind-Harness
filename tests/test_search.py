@@ -11,7 +11,7 @@ from owl_mind.core import prompts
 from owl_mind.core.config import get_settings
 from owl_mind.core.intent.taxonomy import Subagent, TaskKind
 from owl_mind.core.subagents import TOOL_SCOPES, TUTORS
-from owl_mind.materials.search import MAX_RESULTS, Citation, SearchResult
+from owl_mind.materials.search import MAX_RESULTS, Citation, SearchResult, SearchStats
 from owl_mind.tools.context import RunContext
 from owl_mind.tools.materials import materials_search
 from tests.test_auth import logged_in
@@ -44,18 +44,61 @@ class FakeSearch:
         self.calls.append((query, limit))
         return self.results[:limit]
 
+    async def search_with_stats(self, query: str, limit: int = 5):
+        found = await self.search(query, limit)
+        top = found[0].score if found else None
+        return found, SearchStats(len(found), top, 4, False, 12)
+
     async def resolve(self, ids: list[str]) -> dict[str, Citation | None]:
         known = {r.citation_id: Citation(r.title, r.location, r.source_url) for r in self.results}
         return {i: known.get(i) for i in ids}
 
 
 class FakeRuntime:
-    def __init__(self, search) -> None:
-        self.context = RunContext(student_id=ALICE, store=None, today=TODAY, search=search)
+    def __init__(self, search, record=None) -> None:
+        self.context = RunContext(
+            student_id=ALICE, store=None, today=TODAY, search=search, record=record
+        )
 
 
-def run_tool(search, **arguments) -> dict:
-    return asyncio.run(materials_search.coroutine(runtime=FakeRuntime(search), **arguments))
+def run_tool(search, record=None, **arguments) -> dict:
+    runtime = FakeRuntime(search, record)
+    return asyncio.run(materials_search.coroutine(runtime=runtime, **arguments))
+
+
+SECRET_QUERY = "zqx-secret-query about bloom filters"
+
+
+def test_a_search_records_its_stats_and_never_the_query_or_text():
+    recorded = []
+
+    async def record(kind, data):
+        recorded.append((kind, data))
+
+    run_tool(FakeSearch(), record=record, query=SECRET_QUERY)
+
+    assert recorded == [
+        (
+            "retrieval",
+            {
+                "result_count": 1,
+                "top_score": 0.03,
+                "corpus_version": 4,
+                "cache_hit": False,
+                "latency_ms": 12,
+            },
+        )
+    ]
+    assert "zqx-secret-query" not in repr(recorded)
+
+
+def test_a_failing_recorder_never_fails_the_search():
+    async def broken(kind, data):
+        raise RuntimeError("database down")
+
+    result = run_tool(FakeSearch(), record=broken, query="bloom filters")
+
+    assert len(result["results"]) == 1
 
 
 # -- the tool -----------------------------------------------------------------

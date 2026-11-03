@@ -17,6 +17,8 @@ const run = {
   tokens: 30,
   cost_usd: 0.000123,
   unknown_usage: 0,
+  searched: false,
+  handoff_step: null,
 };
 
 const emptySummary = {
@@ -118,8 +120,8 @@ describe("Admin mode", () => {
     await user.click(screen.getByRole("button", { name: "Search" }));
     await user.click(await screen.findByRole("button", { name: "Next" }));
 
-    expect(calls).toContain("/admin/requests?q=alice&page=1&size=25");
-    expect(calls).toContain("/admin/requests?q=alice&page=2&size=25");
+    expect(calls).toContain("/admin/requests?q=alice&page=1&size=25&route=");
+    expect(calls).toContain("/admin/requests?q=alice&page=2&size=25&route=");
   });
 
   it("shows unknown values as unknown, never as 0", async () => {
@@ -216,5 +218,64 @@ describe("Admin mode", () => {
     expect(screen.getByText("success: 3")).toBeVisible();
     expect(screen.getByRole("cell", { name: "intent" })).toBeVisible();
     expect(screen.getByText(/r1: \$0\.500000, 3 calls/)).toBeVisible();
+  });
+
+  it("filters by route and marks runs that searched or handed off", async () => {
+    const handoff = { ...run, id: "r2", route: "handoff", searched: false, handoff_step: "replies_arrived" };
+    const calls = server({
+      "/admin/requests": { items: [{ ...run, searched: true }, handoff], total: 2, page: 1, size: 25 },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openAdmin(user);
+    await user.selectOptions(await screen.findByLabelText("Route"), "handoff");
+
+    expect(calls).toContain("/admin/requests?q=&page=1&size=25&route=handoff");
+    expect(await screen.findByText("searched")).toBeVisible();
+    expect(screen.getByText("handoff: replies arrived")).toBeVisible();
+  });
+
+  it("shows retrieval and handoff steps in the timeline, with the post as a link", async () => {
+    server({
+      "/admin/requests": { items: [run], total: 1, page: 1, size: 25 },
+      "/admin/requests/r1": {
+        ...run,
+        calls: [],
+        events: [
+          {
+            kind: "retrieval",
+            at: "2026-11-02T00:00:01Z",
+            data: { result_count: 3, top_score: 0.032, corpus_version: 7, cache_hit: true, latency_ms: 9 },
+          },
+          { kind: "handoff", at: "2026-11-02T00:00:02Z", data: { step: "drafted", removed: { email: 2 } } },
+          {
+            kind: "handoff",
+            at: "2026-11-02T00:00:03Z",
+            data: { step: "post_failed", attempts: 1, status: "retrying" },
+          },
+          {
+            kind: "handoff",
+            at: "2026-11-02T00:00:04Z",
+            data: { step: "posted", url: "https://github.com/o/f/discussions/3", posted_as: "bot" },
+          },
+        ],
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openAdmin(user);
+    await user.click(await screen.findByRole("button", { name: "Open" }));
+    const items = (await screen.findAllByRole("listitem")).map((item) => item.textContent);
+
+    expect(items).toContain("retrieval 3 results, top score 0.032, corpus version 7, cache hit, 9 ms");
+    expect(items).toContain("handoff drafted: 2 email removed");
+    expect(items).toContain("handoff post failed: attempts: 1, status: retrying");
+    expect(items).toContain("handoff posted: posted as: bot forum post");
+    expect(screen.getByRole("link", { name: "forum post" })).toHaveAttribute(
+      "href",
+      "https://github.com/o/f/discussions/3",
+    );
   });
 });

@@ -155,6 +155,10 @@ async def _draft_handoff(services: Services, request: RunRequest, emit: _Emitter
         known_values(account.email) if account else [],
         run_id=request.run_id,
     )
+    # Metadata only, for the Admin timeline: counts, never the draft or what was removed.
+    await emit("handoff", {"step": "drafted", "removed": removed})
+    if similar:
+        await emit("handoff", {"step": "similar_found", "count": len(similar)})
     await emit(
         "handoff_draft",
         {
@@ -210,6 +214,7 @@ async def _run_agent(
         store=services.study,
         today=datetime.now(UTC).date(),
         search=services.search,
+        record=emit,
     )
     stream = agent.astream(
         {"messages": [HumanMessage(request.message)]},

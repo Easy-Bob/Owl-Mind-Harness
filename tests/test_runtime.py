@@ -43,8 +43,15 @@ class FakeAdminStore:
         self.views: list[tuple[uuid.UUID, uuid.UUID]] = []
         self.detail: dict | None = None
 
-    async def list_requests(self, query: str, page: int, size: int) -> dict:
-        return {"items": [], "total": 0, "page": page, "size": size, "query": query}
+    async def list_requests(self, query: str, page: int, size: int, route: str = "") -> dict:
+        return {
+            "items": [],
+            "total": 0,
+            "page": page,
+            "size": size,
+            "query": query,
+            "route": route,
+        }
 
     async def get_request(self, run_id: uuid.UUID, viewer_id: uuid.UUID) -> dict | None:
         if self.detail is not None:
