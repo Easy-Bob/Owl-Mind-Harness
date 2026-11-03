@@ -32,6 +32,14 @@ export type Handoff = {
   // A GitHub login, or "bot" for the Owl-Mind app.
   post_as: string | null;
   replies: ForumReply[];
+  // AI rewrites left for this draft. 0 hides the button.
+  improve_left?: number;
+};
+export type Rewrite = {
+  title: string;
+  body: string;
+  removed: Record<string, number>;
+  remaining: number;
 };
 
 export class ApiError extends Error {
@@ -54,11 +62,12 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 function errorMessage(status: number, data: { detail?: unknown } | null): string {
-  if (status >= 502 && status <= 504) {
-    return SERVER_UNAVAILABLE;
-  }
+  // The API's own message comes first. A proxy that can't reach the API sends no JSON.
   if (typeof data?.detail === "string") {
     return data.detail;
+  }
+  if (status >= 502 && status <= 504) {
+    return SERVER_UNAVAILABLE;
   }
   // Validation errors name the field but never repeat what was typed.
   if (Array.isArray(data?.detail)) {
@@ -101,6 +110,8 @@ export const api = {
   approveHandoff: (id: string, title: string, body: string, graded: boolean) =>
     request<Handoff>(`/handoffs/${id}/approve`, { title, body, graded }),
   cancelHandoff: (id: string) => request<Handoff>(`/handoffs/${id}/cancel`, {}),
+  improveHandoff: (id: string, title: string, body: string) =>
+    request<Rewrite>(`/handoffs/${id}/improve`, { title, body }),
   unreadReplies: () => request<Record<string, number>>("/handoffs/unread"),
   markRepliesSeen: (id: string) => request<void>(`/handoffs/${id}/seen`, {}),
   forumAccount: () => request<ForumAccount>("/forum/account"),

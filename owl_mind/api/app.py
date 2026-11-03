@@ -22,12 +22,14 @@ from owl_mind.api.routes import router
 from owl_mind.core.config import ConfigError, get_settings
 from owl_mind.core.events import RedisEventBus
 from owl_mind.core.intent.classifier import IntentStep
+from owl_mind.core.model import get_chat_model
 from owl_mind.core.persistence import open_persistence
 from owl_mind.core.runtime import Services
 from owl_mind.forum.accounts import ForumAccounts, GitHubOAuth, TokenCipher
 from owl_mind.forum.accounts import PostgresAccountStore as PostgresForumAccountStore
 from owl_mind.forum.github import GitHubForum
 from owl_mind.forum.handoff import HandoffService
+from owl_mind.forum.improve import Improver
 from owl_mind.forum.replies import ReplyPoller
 from owl_mind.forum.store import PostgresHandoffStore
 from owl_mind.materials.embedding import FastEmbedEmbedder
@@ -116,6 +118,10 @@ async def _production_services() -> AsyncIterator[Services]:
                 search=search,
                 handoffs=handoffs,
                 forum_accounts=forum_accounts,
+                # Only with a model key: without one, the button is hidden.
+                improver=Improver(handoffs.store, get_chat_model)
+                if settings.deepseek_api_key
+                else None,
             )
     finally:
         if forum is not None:

@@ -223,6 +223,19 @@ describe("App", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Can't reach the server");
   });
 
+  it("explains a proxy that can't reach the API", async () => {
+    // Every request, including the first login check, gets the proxy's plain-text error.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("Bad gateway", { status: 502 })));
+    const user = userEvent.setup();
+    render(<App />);
+    await user.type(await screen.findByLabelText("Email"), "a@example.com");
+    await user.type(screen.getByLabelText("Password"), "a password here");
+
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Can't reach the server");
+  });
+
   it("requires the notice to be accepted, and sends it with signup", async () => {
     const calls = fakeServer({
       "GET /auth/me": { status: 401 },
@@ -645,5 +658,111 @@ describe("Forum replies and accounts", () => {
 
     expect(await screen.findByRole("status")).toHaveTextContent("is connected");
     expect(window.location.search).toBe("");
+  });
+});
+
+describe("Improve with AI", () => {
+  const draft = {
+    id: "h1",
+    status: "draft",
+    title: "Help with BFS",
+    body: "Why is my BFS wrong?",
+    graded: false,
+    url: null,
+    forum_url: null,
+    post_as: "bot",
+    replies: [],
+    improve_left: 3,
+  };
+  const rewrite = {
+    title: "BFS visits nodes twice",
+    body: "My BFS **repeats** nodes. <img src=x onerror=alert(1)>",
+    removed: {},
+    remaining: 2,
+  };
+
+  async function openDraft(routes: Record<string, Reply | ((body: unknown) => Reply)>) {
+    const calls = fakeServer({
+      ...loggedIn,
+      "GET /threads": { body: [{ id: "t1", title: "BFS", created_at: "2026-11-01T00:00:00Z" }] },
+      "GET /threads/t1/messages": { body: [] },
+      "GET /handoffs?thread_id=t1": { body: [draft] },
+      ...routes,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "BFS" }));
+    await screen.findByRole("region", { name: "Forum post draft" });
+    return { calls, user };
+  }
+
+  it("says where the text goes, and makes no call until clicked", async () => {
+    const { calls } = await openDraft({});
+
+    expect(screen.getByText(/to DeepSeek, which stores data in China/)).toBeVisible();
+    expect(screen.getByText(/3 left/)).toBeVisible();
+    expect(calls.some((call) => call.key.endsWith("/improve"))).toBe(false);
+  });
+
+  it("shows the rewrite beside the draft, as plain text, until the student chooses", async () => {
+    const { calls, user } = await openDraft({ "POST /handoffs/h1/improve": { body: rewrite } });
+
+    await user.dblClick(screen.getByRole("button", { name: "Improve with AI" }));
+    const suggested = await screen.findByRole("group", { name: "Suggested rewrite" });
+
+    expect(suggested).toHaveTextContent("BFS visits nodes twice");
+    expect(suggested.querySelectorAll("img, strong")).toHaveLength(0);
+    expect(screen.getByLabelText("Title")).toHaveValue("Help with BFS");
+    expect(calls.filter((call) => call.key === "POST /handoffs/h1/improve")).toEqual([
+      { key: "POST /handoffs/h1/improve", body: { title: draft.title, body: draft.body } },
+    ]);
+
+    await user.click(screen.getByRole("button", { name: "Use this version" }));
+
+    expect(screen.getByLabelText("Title")).toHaveValue(rewrite.title);
+    expect(screen.getByLabelText("Post")).toHaveValue(rewrite.body);
+    expect(screen.getByRole("status")).toHaveTextContent("Check it, then approve");
+    expect(screen.getByText(/2 left/)).toBeVisible();
+  });
+
+  it("keeps the student's draft when they don't want the rewrite", async () => {
+    const { user } = await openDraft({ "POST /handoffs/h1/improve": { body: rewrite } });
+
+    await user.click(screen.getByRole("button", { name: "Improve with AI" }));
+    await user.click(await screen.findByRole("button", { name: "Keep mine" }));
+
+    expect(screen.queryByRole("group", { name: "Suggested rewrite" })).toBeNull();
+    expect(screen.getByLabelText("Post")).toHaveValue(draft.body);
+  });
+
+  it("hides the button after an outage and keeps the draft", async () => {
+    const { user } = await openDraft({
+      "POST /handoffs/h1/improve": {
+        status: 503,
+        body: { detail: "Improve with AI didn't work this time. Your draft is unchanged." },
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Improve with AI" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("unchanged");
+    expect(screen.queryByRole("button", { name: "Improve with AI" })).toBeNull();
+    expect(screen.getByLabelText("Post")).toHaveValue(draft.body);
+    expect(screen.getByRole("button", { name: "Approve and post" })).toBeEnabled();
+  });
+
+  it("shows no button when no rewrites are left", async () => {
+    fakeServer({
+      ...loggedIn,
+      "GET /threads": { body: [{ id: "t1", title: "BFS", created_at: "2026-11-01T00:00:00Z" }] },
+      "GET /threads/t1/messages": { body: [] },
+      "GET /handoffs?thread_id=t1": { body: [{ ...draft, improve_left: 0 }] },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "BFS" }));
+    await screen.findByRole("region", { name: "Forum post draft" });
+
+    expect(screen.queryByRole("button", { name: "Improve with AI" })).toBeNull();
   });
 });

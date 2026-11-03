@@ -333,6 +333,39 @@ textarea:focus-visible {
   border-radius: 6px;
 }
 
+.handoff-improve {
+  margin-top: 12px;
+}
+
+.handoff-improve button {
+  padding: 4px 12px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.handoff-suggestion {
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+
+.handoff-suggestion h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.handoff-suggestion-title {
+  font-weight: 600;
+}
+
+.handoff-suggestion-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .forum-replies {
   margin: 12px 0 0;
   padding: 0;

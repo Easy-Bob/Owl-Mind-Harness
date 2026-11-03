@@ -28,6 +28,9 @@ class Handoff:
     created_at: datetime | None = None
     # A GitHub login, or "bot" for the Owl-Mind app.
     posted_as: str | None = None
+    # The run that made the draft, so a rewrite's model call is recorded under it.
+    run_id: uuid.UUID | None = None
+    improvements: int = 0
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,9 @@ class HandoffStore(Protocol):
         """Change the status only if it's still the expected one, so two approvals post once."""
 
     async def last_posted_at(self, student_id: uuid.UUID) -> datetime | None: ...
+
+    async def claim_improvement(self, handoff_id: uuid.UUID, maximum: int) -> int | None:
+        """Count one rewrite of a draft, and return the new count, or None at the maximum."""
 
     async def record_post(
         self, handoff_id: uuid.UUID, url: str, node_id: str, posted_at: datetime
@@ -123,9 +129,6 @@ class InMemoryHandoffStore:
         self.posts: dict[uuid.UUID, _Post] = {}
         self.replies: dict[str, SavedReply] = {}
 
-    async def save(self, handoff: Handoff) -> None:
-        self.handoffs[handoff.id] = handoff
-
     async def get(self, student_id, handoff_id) -> Handoff | None:
         handoff = self.handoffs.get(handoff_id)
         return handoff if handoff and handoff.student_id == student_id else None
@@ -143,6 +146,20 @@ class InMemoryHandoffStore:
             return False
         self.handoffs[handoff_id] = replace(handoff, status=status)
         return True
+
+    async def claim_improvement(self, handoff_id, maximum) -> int | None:
+        handoff = self.handoffs.get(handoff_id)
+        if handoff is None or handoff.status != "draft" or handoff.improvements >= maximum:
+            return None
+        self.handoffs[handoff_id] = replace(handoff, improvements=handoff.improvements + 1)
+        return handoff.improvements + 1
+
+    async def save(self, handoff: Handoff) -> None:
+        # The rewrite counter changes only through claim_improvement, never from a stale copy.
+        current = self.handoffs.get(handoff.id)
+        if current is not None:
+            handoff = replace(handoff, improvements=current.improvements)
+        self.handoffs[handoff.id] = handoff
 
     async def last_posted_at(self, student_id) -> datetime | None:
         times = [
@@ -242,15 +259,15 @@ class InMemoryHandoffStore:
 
 _SAVE = """
 INSERT INTO app.handoffs (id, student_id, thread_id, status, title, body, graded, category,
-    url, attempts, posted_as)
+    url, attempts, posted_as, run_id)
 VALUES (:id, :student_id, :thread_id, :status, :title, :body, :graded, :category, :url, :attempts,
-    :posted_as)
+    :posted_as, :run_id)
 ON CONFLICT (id) DO UPDATE SET status = :status, title = :title, body = :body, graded = :graded,
     url = :url, attempts = :attempts, posted_as = :posted_as, updated_at = now()
 """
 _COLUMNS = (
     "id, student_id, thread_id, status, title, body, graded, category, url, attempts, created_at,"
-    " posted_as"
+    " posted_as, run_id, improvements"
 )
 _LEASE = """
 UPDATE app.forum_posts SET lease_until = :now + :lease
@@ -278,7 +295,8 @@ class PostgresHandoffStore:
         self._sessions = sessions
 
     async def save(self, handoff: Handoff) -> None:
-        values = {k: v for k, v in vars(handoff).items() if k != "created_at"}
+        # The rewrite counter changes only through claim_improvement, never from a stale copy.
+        values = {k: v for k, v in vars(handoff).items() if k not in ("created_at", "improvements")}
         async with self._sessions.begin() as session:
             await session.execute(text(_SAVE), values)
 
@@ -312,6 +330,17 @@ class PostgresHandoffStore:
                 {"id": handoff_id, "expected": expected, "status": status},
             )
         return claimed is not None
+
+    async def claim_improvement(self, handoff_id, maximum) -> int | None:
+        async with self._sessions.begin() as session:
+            return await session.scalar(
+                text(
+                    "UPDATE app.handoffs SET improvements = improvements + 1, updated_at = now()"
+                    " WHERE id = :id AND status = 'draft' AND improvements < :maximum"
+                    " RETURNING improvements"
+                ),
+                {"id": handoff_id, "maximum": maximum},
+            )
 
     async def last_posted_at(self, student_id) -> datetime | None:
         async with self._sessions() as session:

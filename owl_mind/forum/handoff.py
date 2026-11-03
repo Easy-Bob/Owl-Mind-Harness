@@ -108,6 +108,7 @@ class HandoffService:
         message: str,
         earlier: list[str],
         known_values: list[str],
+        run_id: uuid.UUID | None = None,
     ) -> tuple[Handoff, dict[str, int], list[SimilarPost]]:
         title, body = summarize(message, earlier)
         title, body, removed = prepare(title, body, False, known_values)
@@ -121,6 +122,7 @@ class HandoffService:
             False,
             self.category,
             created_at=self._clock(),
+            run_id=run_id,
         )
         await self.store.save(handoff)
         similar: list[SimilarPost] = []
@@ -229,6 +231,7 @@ def public(
     home_url: str | None,
     post_as: str | None = None,
     replies: list[SavedReply] = (),
+    improve_left: int = 0,
 ) -> dict[str, Any]:
     return {
         "id": str(handoff.id),
@@ -251,4 +254,6 @@ def public(
             }
             for reply in replies
         ],
+        # Rewrites left for this draft. 0 hides the button, including when the model is off.
+        "improve_left": improve_left if handoff.status == "draft" else 0,
     }

@@ -65,6 +65,7 @@ class Services:
     search: Any = None
     handoffs: Any = None
     forum_accounts: Any = None
+    improver: Any = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,7 @@ async def _draft_handoff(services: Services, request: RunRequest, emit: _Emitter
         request.message,
         earlier,
         known_values(account.email) if account else [],
+        run_id=request.run_id,
     )
     await emit(
         "handoff_draft",

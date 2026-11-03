@@ -213,6 +213,29 @@ def check_forum_access(root: Path) -> list[Violation]:
     return found
 
 
+FORUM_MODEL_MODULE = "owl_mind/forum/improve.py"
+MODEL_NAMES = {"get_model", "get_chat_model", "ModelTier", "ainvoke", "invoke"}
+
+
+def check_handoff_model_calls(root: Path) -> list[Violation]:
+    """On the handoff path, only the clicked "Improve with AI" rewrite may call a model."""
+    rule = "handoff-model-call"
+    found = []
+    for path, tree, error in _product_trees(root, rule):
+        if error:
+            found.append(error)
+        elif path.startswith("owl_mind/forum/") and path != FORUM_MODEL_MODULE:
+            for node in ast.walk(tree):
+                match node:
+                    case ast.Name(id=name) | ast.Attribute(attr=name) if name in MODEL_NAMES:
+                        found.append(Violation(rule, path, node.lineno, f"uses {name}"))
+                    case ast.ImportFrom(module=module) if module and module.startswith(
+                        "owl_mind.core.model"
+                    ):
+                        found.append(Violation(rule, path, node.lineno, "imports the model door"))
+    return found
+
+
 def check_models_from_door(models: list) -> list[Violation]:
     """Every model given to an agent has token accounting, which only core/model.py attaches."""
     return [
@@ -308,4 +331,5 @@ ALL_CHECKS = (
     check_ascii_source,
     check_agent_construction,
     check_forum_access,
+    check_handoff_model_calls,
 )
