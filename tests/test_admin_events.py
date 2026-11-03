@@ -60,6 +60,12 @@ def test_retrieval_keeps_only_its_named_fields():
     }
 
 
+def test_budget_step_keeps_only_its_step_and_percent():
+    payload = {"step": "wind_down", "percent": 72, "note": "zqx-student-text"}
+
+    assert safe_event("budget_step", payload) == {"step": "wind_down", "percent": 72}
+
+
 @pytest.mark.parametrize(
     "payload",
     [

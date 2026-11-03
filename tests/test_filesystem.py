@@ -25,6 +25,7 @@ from owl_mind.core.intent.taxonomy import Subagent, TaskKind
 from owl_mind.core.model import get_chat_model
 from owl_mind.services.study_store import InMemoryStudyStore
 from owl_mind.tools.context import RunContext
+from tests.budget_helpers import meter
 from tests.fake_deepseek import FakeDeepSeek
 
 ALICE = uuid.UUID(int=1)
@@ -110,6 +111,7 @@ class Harness:
             TaskKind.LEARN,
             selected,
             store=self.store,
+            meter=meter(self.student),
             checkpointer=self.checkpointer,
             get_model=get_model,
         )

@@ -19,6 +19,7 @@ from owl_mind.api.forum_account import HideCallbackQuery
 from owl_mind.api.forum_account import router as forum_account_router
 from owl_mind.api.handoffs import router as handoffs_router
 from owl_mind.api.routes import router
+from owl_mind.core.budget import RedisBudgetLedger
 from owl_mind.core.config import ConfigError, get_settings
 from owl_mind.core.events import RedisEventBus
 from owl_mind.core.intent.classifier import IntentStep
@@ -128,6 +129,7 @@ async def _production_services() -> AsyncIterator[Services]:
                 search=search,
                 handoffs=handoffs,
                 forum_accounts=forum_accounts,
+                budgets=RedisBudgetLedger(client),
                 # Only with a model key: without one, the button is hidden.
                 improver=Improver(handoffs.store, get_chat_model, events)
                 if settings.deepseek_api_key

@@ -60,10 +60,19 @@ class Run(Base):
             unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
         ),
+        # One at a time for a student too, so a second chat can't double their spending.
+        Index(
+            "ix_app_runs_one_active_per_student",
+            "student_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     thread_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("threads.id"), index=True)
+    # The thread's owner, copied here so the index above can see it.
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("students.id"))
     status: Mapped[str] = mapped_column(String(20))
     route: Mapped[str | None] = mapped_column(String(20))
     task_kind: Mapped[str | None] = mapped_column(String(20))

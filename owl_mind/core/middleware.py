@@ -10,9 +10,12 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolCallRequest
-from langchain_core.messages import SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.errors import GraphBubbleUp
+from langgraph.types import Command
 
+from owl_mind.core import replies
+from owl_mind.core.budget import BudgetStop, RunMeter
 from owl_mind.core.intent.taxonomy import Subagent, TaskKind
 
 logger = logging.getLogger(__name__)
@@ -31,6 +34,33 @@ ARGUMENT_CHARS: dict[tuple[str, str], int] = {
     ("edit_file", "old_string"): 8000,
 }
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+DEFAULT_RESULT_CHARS = 6000
+# A tutor's report is the whole of its work, so it gets more room than one tool's result.
+RESULT_CHARS: dict[str, int] = {"task": 8000}
+# Tools the run can do without once its budget runs low: each one leads to more model calls.
+_WIND_DOWN_TOOLS = frozenset({"task", "write_todos"})
+_WIND_DOWN_NOTE = (
+    "## Budget\nThis request has used most of its budget. Don't ask a tutor or plan further: "
+    "answer with what you have."
+)
+_FINAL_NOTE = (
+    "## Budget\nThis request's budget is nearly used up. No tools now: give your answer with "
+    "what you have, and say briefly if anything is left out."
+)
+
+
+def _with_note(system: SystemMessage | None, note: str) -> SystemMessage:
+    if system is None:
+        return SystemMessage(note)
+    if isinstance(system.content, str):
+        return SystemMessage(f"{system.content}\n\n{note}")
+    return SystemMessage([*system.content, {"type": "text", "text": f"\n\n{note}"}])
+
+
+def _tool_name(tool: Any) -> str | None:
+    if isinstance(tool, dict):
+        return tool.get("name") or tool.get("function", {}).get("name")
+    return getattr(tool, "name", None)
 
 
 def _refuse(request: ToolCallRequest, text: str) -> ToolMessage:
@@ -57,7 +87,7 @@ class ToolErrorMiddleware(AgentMiddleware):
     def wrap_tool_call(self, request: ToolCallRequest, handler: Callable) -> Any:
         try:
             return handler(request)
-        except GraphBubbleUp:
+        except GraphBubbleUp, BudgetStop:
             raise  # An interrupt or a stop, not a failure.
         except Exception as exc:
             return self._message(request, exc)
@@ -67,10 +97,48 @@ class ToolErrorMiddleware(AgentMiddleware):
     ) -> Any:
         try:
             return await handler(request)
-        except GraphBubbleUp:
+        except GraphBubbleUp, BudgetStop:
             raise
         except Exception as exc:
             return self._message(request, exc)
+
+
+def _capped(message: ToolMessage, limit: int) -> ToolMessage:
+    if not isinstance(message.content, str) or len(message.content) <= limit:
+        return message
+    cut = message.content[:limit]
+    note = f"\n\n[Cut to {limit} of {len(message.content)} characters.]"
+    return message.model_copy(update={"content": cut + note})
+
+
+class ResultCapMiddleware(AgentMiddleware):
+    """Cut every tool result and tutor report to a fixed size before the model reads it."""
+
+    def _cap(self, request: ToolCallRequest, result: Any) -> Any:
+        limit = RESULT_CHARS.get(request.tool_call["name"], DEFAULT_RESULT_CHARS)
+        if isinstance(result, ToolMessage):
+            return _capped(result, limit)
+        # The task tool answers with a Command that carries the tutor's report.
+        update = getattr(result, "update", None) if isinstance(result, Command) else None
+        if isinstance(update, dict) and isinstance(update.get("messages"), list):
+            messages = [
+                _capped(m, limit) if isinstance(m, ToolMessage) else m for m in update["messages"]
+            ]
+            return Command(
+                graph=result.graph,
+                update={**update, "messages": messages},
+                resume=result.resume,
+                goto=result.goto,
+            )
+        return result
+
+    def wrap_tool_call(self, request: ToolCallRequest, handler: Callable) -> Any:
+        return self._cap(request, handler(request))
+
+    async def awrap_tool_call(
+        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[Any]]
+    ) -> Any:
+        return self._cap(request, await handler(request))
 
 
 class ToolArgumentMiddleware(AgentMiddleware):
@@ -199,17 +267,111 @@ class ContextMiddleware(AgentMiddleware):
         return await handler(self._with_block(request))
 
 
+class BudgetMiddleware(AgentMiddleware):
+    """Checks every budget before each model call, and steps down as the run's budget runs low.
+
+    At 70% the run can't ask a tutor or plan. At 90% the model gets one call with no tools to
+    answer with what it has. At 100% no call starts. Async only, like every run.
+    """
+
+    def __init__(self, meter: RunMeter) -> None:
+        super().__init__()
+        self.meter = meter
+
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelResponse]]
+    ) -> ModelResponse:
+        step = await self.meter.check()
+        if step == "final":
+            request = request.override(
+                tool_choice="none",
+                system_message=_with_note(request.system_message, _FINAL_NOTE),
+            )
+        elif step == "wind_down":
+            request = request.override(
+                tools=[t for t in request.tools if _tool_name(t) not in _WIND_DOWN_TOOLS],
+                system_message=_with_note(request.system_message, _WIND_DOWN_NOTE),
+            )
+        return await handler(request)
+
+    async def awrap_tool_call(
+        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[Any]]
+    ) -> Any:
+        # Hidden tools are refused too, in case the model calls one anyway.
+        if self.meter.step and request.tool_call["name"] in _WIND_DOWN_TOOLS:
+            return _refuse(
+                request, "This request's budget is nearly used. Answer with what you have."
+            )
+        return await handler(request)
+
+
+class JoinAnswerMiddleware(AgentMiddleware):
+    """On a two-tutor turn, the answer is the tutors' replies joined in code, once all have come.
+
+    The orchestrator's last model call is skipped, so every [cite:ID] stays exactly as the tutor
+    wrote it and no tokens go on rewriting. If a tutor failed, the orchestrator answers as usual.
+    It goes outside the budget check, because joining costs nothing.
+    """
+
+    def __init__(self, tutors: tuple[str, ...]) -> None:
+        super().__init__()
+        self.tutors = tutors
+
+    def _replies(self, messages: Sequence[Any]) -> dict[str, str]:
+        """Each tutor's latest successful reply in this turn."""
+        start = max((i for i, m in enumerate(messages) if isinstance(m, HumanMessage)), default=0)
+        asked: dict[str, str] = {}
+        found: dict[str, str] = {}
+        for message in messages[start:]:
+            if isinstance(message, AIMessage):
+                for call in message.tool_calls:
+                    if call["name"] == "task":
+                        asked[call["id"]] = (call.get("args") or {}).get("subagent_type", "")
+            elif isinstance(message, ToolMessage) and message.name == "task":
+                tutor = asked.get(message.tool_call_id)
+                text = message.text.strip()
+                if tutor and message.status != "error" and text:
+                    found[tutor] = text
+        return found
+
+    def joined(self, messages: Sequence[Any]) -> str | None:
+        found = self._replies(messages)
+        if not all(tutor in found for tutor in self.tutors):
+            return None
+        parts = [found[self.tutors[0]]]
+        parts += [f"{replies.JOIN_LEADS.get(t, '')}\n\n{found[t]}".strip() for t in self.tutors[1:]]
+        return "\n\n".join(parts)
+
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelResponse]]
+    ) -> ModelResponse:
+        # The state holds every message, even ones a summary has replaced in the request.
+        text = self.joined(request.state.get("messages", request.messages))
+        if text is None:
+            return await handler(request)
+        record = getattr(getattr(request.runtime, "context", None), "record", None)
+        if record is not None:
+            await record("answer", {"mode": "joined", "parts": len(self.tutors)})
+        return ModelResponse(result=[AIMessage(content=text)])
+
+
 def turn_middleware(
     task_kind: TaskKind,
     tutors: Sequence[Subagent],
     tool_calls: int,
     seconds: int,
+    meter: RunMeter,
     *,
     orchestrator: bool,
 ) -> list[AgentMiddleware]:
     """The checks for one agent, outermost first: errors are caught around everything else."""
     names = tuple(tutor.value for tutor in tutors)
-    stack: list[AgentMiddleware] = [ToolErrorMiddleware(), ToolArgumentMiddleware()]
+    stack: list[AgentMiddleware] = [
+        BudgetMiddleware(meter),
+        ToolErrorMiddleware(),
+        ResultCapMiddleware(),
+        ToolArgumentMiddleware(),
+    ]
     if orchestrator:
         stack.append(FanOutMiddleware(allowed=frozenset(names)))
     stack.append(ContextMiddleware(task_kind, names, tool_calls, seconds))

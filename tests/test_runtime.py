@@ -15,6 +15,7 @@ from owl_mind.api import routes
 from owl_mind.api.app import create_app
 from owl_mind.api.deps import current_student
 from owl_mind.core import replies, runtime, telemetry
+from owl_mind.core.budget import InMemoryBudgetLedger
 from owl_mind.core.config import get_settings
 from owl_mind.core.events import InMemoryEventBus
 from owl_mind.core.intent import classifier
@@ -81,6 +82,7 @@ class World:
         self.accounts = InMemoryAccountStore()
         self.limiter = InMemoryLoginLimiter()
         self.admin = FakeAdminStore()
+        self.budgets = InMemoryBudgetLedger()
         self.services = Services(
             admin=self.admin,
             accounts=self.accounts,
@@ -92,6 +94,7 @@ class World:
             checkpointer=self.saver,
             intent=IntentStep(lambda tier, c, m: get_model(tier, component=c, max_tokens=m)),
             get_model=get_model,
+            budgets=self.budgets,
         )
 
         @asynccontextmanager
@@ -252,6 +255,41 @@ def test_composite_turn_sends_todo_events():
 
     todos = [data for kind, data in events if kind == "todo_delta"]
     assert todos[0]["todos"][0]["content"] == "explain"
+
+
+def test_a_joined_two_tutor_answer_streams_to_the_student_and_is_recorded():
+    world = World(
+        intent(concept_explain=0.9, quiz_request=0.8),
+        {**task("concept_tutor"), "content": "I'll explain first, then quiz you."},
+        say("Heaps keep the smallest item on top [cite:x1]."),
+        task("quiz_master"),
+        say("1. Where is the smallest item?"),
+    )
+    with world.client() as client:
+        run_id = start(client)["run_id"]
+        events = stream(client, run_id)
+        history = client.get(f"/threads/{world.runs.runs[uuid.UUID(run_id)].thread_id}/messages")
+
+    answer = text_of(events)
+    # What the orchestrator said while handing out work never reaches the student.
+    assert answer.startswith("Heaps keep the smallest item on top [cite:x1].")
+    assert answer.endswith("1. Where is the smallest item?")
+    assert ("answer", {"mode": "joined", "parts": 2}) in events
+    assert events[-1] == ("done", {"status": "completed"})
+    assert history.json()[-1] == {"role": "assistant", "content": answer}
+
+
+def test_a_composite_turn_that_falls_back_to_a_rewrite_still_shows_the_answer(monkeypatch):
+    world = World(
+        intent(concept_explain=0.9, quiz_request=0.8),
+        {**task("concept_tutor"), "content": "Let me ask a tutor."},
+        say("explanation"),
+        say("The quiz tutor isn't needed, here is your answer."),
+    )
+    with world.client() as client:
+        events = stream(client, start(client)["run_id"])
+
+    assert text_of(events) == "The quiz tutor isn't needed, here is your answer."
 
 
 def test_left_out_intents_are_named_after_the_answer():
@@ -513,11 +551,11 @@ def test_finished_run_with_a_lost_stream_still_ends_the_response():
 
 def test_every_task_kind_has_a_limit():
     assert set(RUN_LIMITS) == set(TaskKind)
-    assert RUN_LIMITS[TaskKind.SUPPORT] == RunLimit(5, 30)
+    assert RUN_LIMITS[TaskKind.SUPPORT] == RunLimit(5, 30, 15_000)
 
 
 def test_tool_limit_stops_the_run_and_says_so(monkeypatch):
-    monkeypatch.setitem(RUN_LIMITS, TaskKind.PRACTICE, RunLimit(1, 30))
+    monkeypatch.setitem(RUN_LIMITS, TaskKind.PRACTICE, RunLimit(1, 30, 60_000))
     world = World(
         intent(problem_help=0.9),
         task("practice_coach"),
@@ -537,7 +575,7 @@ def test_tool_limit_stops_the_run_and_says_so(monkeypatch):
 
 
 def test_time_limit_stops_the_run_and_says_so(monkeypatch):
-    monkeypatch.setitem(RUN_LIMITS, TaskKind.LEARN, RunLimit(20, 0))
+    monkeypatch.setitem(RUN_LIMITS, TaskKind.LEARN, RunLimit(20, 0, 60_000))
     world = World(intent(concept_explain=0.9), say("never reached"))
     with world.client() as client:
         run_id = start(client)["run_id"]
@@ -548,7 +586,7 @@ def test_time_limit_stops_the_run_and_says_so(monkeypatch):
 
 
 def test_thread_can_continue_after_a_stopped_run(monkeypatch):
-    monkeypatch.setitem(RUN_LIMITS, TaskKind.PRACTICE, RunLimit(0, 30))
+    monkeypatch.setitem(RUN_LIMITS, TaskKind.PRACTICE, RunLimit(0, 30, 60_000))
     world = World(
         intent(problem_help=0.9),
         task("practice_coach"),
@@ -581,6 +619,49 @@ def test_second_message_on_a_busy_thread_gets_409():
         response = client.post(f"/threads/{thread.id}/messages", json={"message": "hi"})
 
     assert response.status_code == 409
+
+
+def busy_world() -> tuple[World, object]:
+    world = World()
+
+    async def scenario():
+        thread = await world.runs.create_thread(ALICE, "busy")
+        await world.runs.create_run(thread.id)
+
+    return world, scenario
+
+
+def test_a_message_in_another_chat_waits_while_an_answer_is_running():
+    world, scenario = busy_world()
+    with world.client() as client:
+        client.portal.call(scenario)
+        other = client.portal.call(world.runs.create_thread, ALICE, "other")
+        response = client.post(f"/threads/{other.id}/messages", json={"message": "hi"})
+
+    assert response.status_code == 409
+    assert "still being written" in response.json()["detail"]
+    assert world.fake.requests == []
+
+
+def test_a_new_chat_waits_too_and_leaves_no_empty_chat_behind():
+    world, scenario = busy_world()
+    with world.client() as client:
+        client.portal.call(scenario)
+        response = client.post("/threads", json={"message": "hi"})
+        titles = [t["title"] for t in client.get("/threads").json()]
+
+    assert response.status_code == 409
+    assert titles == ["busy"]
+
+
+def test_another_student_is_not_blocked():
+    world, scenario = busy_world()
+    world.student = BOB
+    with world.client() as client:
+        client.portal.call(scenario)
+        response = client.post("/threads", json={"message": "hello"})
+
+    assert response.status_code == 201
 
 
 def test_unexpected_error_fails_the_run_without_leaking_details():

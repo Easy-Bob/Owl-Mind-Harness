@@ -21,6 +21,7 @@ from owl_mind.core.model import get_chat_model
 from owl_mind.core.persistence import open_persistence
 from owl_mind.services.study_store import InMemoryStudyStore
 from owl_mind.tools.context import RunContext
+from tests.budget_helpers import meter
 from tests.fake_deepseek import FakeDeepSeek
 from tests.persistence_probe import fake_embed
 from tests.test_filesystem import TODAY, call, memory_item, say, task
@@ -61,6 +62,7 @@ async def run_agent(persistence, subagents, replies, student, thread) -> list[st
         TaskKind.LEARN,
         subagents,
         store=persistence.store,
+        meter=meter(student),
         checkpointer=persistence.checkpointer,
         get_model=get_model,
     )

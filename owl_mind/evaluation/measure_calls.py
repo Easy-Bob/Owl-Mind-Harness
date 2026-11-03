@@ -1,12 +1,13 @@
 """Measures model calls, tokens and cost per route and task kind on a fixed message set.
 
-The real baseline needs live agent runs, so it waits for M3-E. Until then this only runs against
+Live, it uses the real course search, so tutors read real notes. Offline tests run it against
 scripted replies, which proves that it counts correctly, not what real turns cost.
 
-Usage, after M3-E: uv run python -m owl_mind.evaluation.measure_calls baseline.json
+Usage: LIVE_AGENT_RUNS_ENABLED=true uv run python -m owl_mind.evaluation.measure_calls out.json
 """
 
 import asyncio
+import dataclasses
 import json
 import sys
 import uuid
@@ -18,19 +19,26 @@ from typing import Any
 import psycopg
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from owl_mind.core import telemetry
+from owl_mind.core.budget import InMemoryBudgetLedger
 from owl_mind.core.config import get_settings
 from owl_mind.core.events import InMemoryEventBus
 from owl_mind.core.intent.classifier import IntentStep
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.runtime import RunRequest, Services, execute_run
+from owl_mind.materials.embedding import FastEmbedEmbedder
+from owl_mind.materials.search import InMemorySearchCache, MaterialsSearch
+from owl_mind.materials.store import PostgresMaterialsStore
 from owl_mind.services.accounts import InMemoryAccountStore, InMemoryLoginLimiter
+from owl_mind.services.models import sqlalchemy_url
 from owl_mind.services.run_store import InMemoryRunStore
 from owl_mind.services.study_store import InMemoryStudyStore
 from owl_mind.worker.telemetry import calculate_cost
 
-TOKEN_LIMIT = 100_000
+# About $0.15 at the peak price. Every agent turn is capped by its run budget as well.
+TOKEN_LIMIT = 500_000
 
 MESSAGES = (
     "hello",
@@ -132,19 +140,31 @@ def memory_services(get_model: Callable[..., Any] = get_chat_model) -> Services:
         checkpointer=InMemorySaver(),
         intent=IntentStep(lambda tier, c, m: get_model(tier, component=c, max_tokens=m)),
         get_model=get_model,
+        budgets=InMemoryBudgetLedger(),
     )
+
+
+async def _measure_live(db: psycopg.Connection) -> Report:
+    settings = get_settings()
+    engine = create_async_engine(sqlalchemy_url(settings.database_url))
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    embedder = FastEmbedEmbedder(settings.embedding_model, settings.embedding_cache_dir)
+    search = MaterialsSearch(
+        sessions, PostgresMaterialsStore(sessions), embedder, InMemorySearchCache()
+    )
+    try:
+        services = dataclasses.replace(memory_services(), search=search)
+        return await measure(services, cost_of=lambda event: calculate_cost(event, db))
+    finally:
+        await engine.dispose()
 
 
 def main() -> None:
     settings = get_settings()
     if not settings.live_agent_runs_enabled:
-        sys.exit(
-            "No live agent runs until M3-E delivers token budgets, so there's nothing to measure."
-        )
+        sys.exit("LIVE_AGENT_RUNS_ENABLED is off, so there's nothing to measure.")
     with psycopg.connect(settings.database_url) as db:
-        report = asyncio.run(
-            measure(memory_services(), cost_of=lambda event: calculate_cost(event, db))
-        )
+        report = asyncio.run(_measure_live(db))
     Path(sys.argv[1]).write_text(json.dumps(report.as_dict(), indent=2) + "\n")
 
 

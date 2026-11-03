@@ -15,7 +15,22 @@ HANDOFF_DRAFTED = (
     " Nothing is posted until you do."
 )
 HANDOFF_UNAVAILABLE = "Posting to the forum isn't available yet, so I can't reach a tutor for you."
-AGENTS_UNAVAILABLE = "Tutoring answers aren't available yet. This feature is still being built."
+AGENTS_UNAVAILABLE = "Tutoring answers are switched off right now. Please try again later."
+STUDENT_BUDGET = (
+    "You've reached today's limit for tutoring answers. It resets at midnight UTC. You can still"
+    " check what's due, or ask for a human tutor on the forum."
+)
+AGENTS_PAUSED = (
+    "Tutoring answers are paused for now. Please try again later, or ask for a human tutor on"
+    " the forum."
+)
+# Put before a tutor's reply when it isn't the first part of a joined answer.
+JOIN_LEADS = {
+    "concept_tutor": "Here's the idea behind it.",
+    "practice_coach": "Now, for the problem you're working on:",
+    "study_planner": "And here's how this fits into your studying:",
+    "quiz_master": "Now let's check your understanding.",
+}
 RUN_STOPPED = "I had to stop before finishing this answer. Please try asking again."
 RUN_FAILED = "Something went wrong with this answer. Please try again."
 

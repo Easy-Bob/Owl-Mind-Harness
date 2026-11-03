@@ -90,9 +90,10 @@ class Seed:
                 (self.thread, self.student, SECRET_TITLE),
             )
             db.execute(
-                "INSERT INTO app.runs (id, thread_id, status, route, task_kind)"
-                " VALUES (%s, %s, 'completed', %s, 'learn')",
-                (self.run, self.thread, route),
+                "INSERT INTO app.runs (id, thread_id, student_id, status, route, task_kind)"
+                " SELECT %s, id, student_id, 'completed', %s, 'learn'"
+                " FROM app.threads WHERE id = %s",
+                (self.run, route, self.thread),
             )
             events = [
                 ("000001:tool_start", "tool_start", {"name": "build_hint", "args": "secret"}),
@@ -183,9 +184,9 @@ def test_list_pages_newest_first():
     with psycopg.connect(get_settings().database_url) as db:
         db.execute("UPDATE app.runs SET status = 'failed' WHERE id = %s", (seed.run,))
         db.execute(
-            "INSERT INTO app.runs (id, thread_id, status, created_at)"
-            " VALUES (%s, %s, 'completed', %s)",
-            (newer, seed.thread, datetime.now(UTC) + timedelta(minutes=1)),
+            "INSERT INTO app.runs (id, thread_id, student_id, status, created_at)"
+            " SELECT %s, id, student_id, 'completed', %s FROM app.threads WHERE id = %s",
+            (newer, datetime.now(UTC) + timedelta(minutes=1), seed.thread),
         )
 
     async def body(store):
@@ -205,8 +206,8 @@ def test_run_with_no_model_call_still_appears_with_no_cost():
     with psycopg.connect(get_settings().database_url) as db:
         db.execute("UPDATE app.runs SET status = 'failed' WHERE id = %s", (seed.run,))
         db.execute(
-            "INSERT INTO app.runs (id, thread_id, status, route)"
-            " VALUES (%s, %s, 'completed', 'rule')",
+            "INSERT INTO app.runs (id, thread_id, student_id, status, route)"
+            " SELECT %s, id, student_id, 'completed', 'rule' FROM app.threads WHERE id = %s",
             (quiet, seed.thread),
         )
 

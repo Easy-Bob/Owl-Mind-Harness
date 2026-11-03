@@ -18,6 +18,7 @@ from owl_mind.core.model import get_chat_model
 from owl_mind.core.subagents import TOOL_SCOPES, TUTORS
 from owl_mind.services.study_store import InMemoryStudyStore
 from owl_mind.tools.context import RunContext
+from tests.budget_helpers import meter
 from tests.fake_deepseek import FakeDeepSeek
 from tests.guard_rails import check_models_from_door, check_tool_scopes
 
@@ -67,6 +68,7 @@ class Run:
         self.fake = FakeDeepSeek(list(replies), status=status)
         self.models: list = []
         self.store = InMemoryStudyStore()
+        self.meter = meter()
 
     def get_model(self, tier, *, component, max_tokens):
         model = get_chat_model(tier, component=component, max_tokens=max_tokens)
@@ -76,7 +78,11 @@ class Run:
 
     def invoke(self, task_kind, subagents, message="help me"):
         agent = build_owl_agent(
-            task_kind, subagents, store=InMemoryStore(), get_model=self.get_model
+            task_kind,
+            subagents,
+            store=InMemoryStore(),
+            meter=self.meter,
+            get_model=self.get_model,
         )
         context = RunContext(student_id=ALICE, store=self.store, today=TODAY)
         return asyncio.run(agent.ainvoke({"messages": [HumanMessage(message)]}, context=context))
@@ -261,6 +267,7 @@ def test_components_and_token_caps_are_set_per_agent():
     assert labels == {
         "orchestrator": 1200,
         "agent:practice_coach": TUTORS[Subagent.PRACTICE_COACH].max_tokens,
+        "summarization": 1000,
     }
 
 
