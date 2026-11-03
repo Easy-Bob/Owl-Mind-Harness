@@ -17,6 +17,7 @@ from owl_mind.forum.handoff import (
     known_values,
     public,
 )
+from owl_mind.forum.improve import MAX_IMPROVEMENTS, ImproveUnavailable
 
 router = APIRouter(prefix="/handoffs")
 
@@ -53,9 +54,42 @@ async def for_thread(thread_id: uuid.UUID, user: User, services: ServicesDep) ->
             _home(services),
             post_as,
             [reply for reply in replies if reply.handoff_id == handoff.id],
+            _improve_left(services, handoff.improvements),
         )
         for handoff in handoffs
     ]
+
+
+def _improve_left(services: Services, used: int) -> int:
+    return MAX_IMPROVEMENTS - used if services.improver is not None else 0
+
+
+class ImproveIn(BaseModel):
+    title: str = Field(max_length=MAX_TITLE_CHARS)
+    body: str = Field(max_length=MAX_BODY_CHARS)
+
+
+@router.post("/{handoff_id}/improve")
+async def improve(
+    handoff_id: uuid.UUID, body: ImproveIn, user: User, services: ServicesDep
+) -> dict[str, Any]:
+    """Only on a click. Returns a rewrite for the student to compare; nothing is saved or posted."""
+    _service(services)
+    if services.improver is None:
+        raise HTTPException(status_code=503, detail="Improve with AI isn't available.")
+    try:
+        return await services.improver.improve(
+            user.id, handoff_id, body.title, body.body, known_values(user.email)
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Draft not found") from exc
+    except HandoffError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImproveUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Improve with AI didn't work this time. Your draft is unchanged.",
+        ) from exc
 
 
 @router.get("/unread")

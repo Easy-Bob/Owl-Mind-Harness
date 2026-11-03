@@ -336,3 +336,36 @@ def test_the_database_row_holds_no_plaintext_token():
 
     assert b"ghu_plain_token" not in bytes(stored)
     assert cipher.decrypt(bytes(stored)) == "ghu_plain_token"
+
+
+# -- rewrites ---------------------------------------------------------------
+
+
+def test_rewrites_are_capped_once_even_when_clicked_together(run):
+    alice = new_student()
+    draft = handoff(alice, new_thread(alice))
+
+    async def body(store):
+        await store.save(draft)
+        results = await asyncio.gather(*(store.claim_improvement(draft.id, 3) for _ in range(5)))
+        # A later save from an older copy mustn't reset the count.
+        await store.save(replace(draft, title="Edited"))
+        saved = await store.get(alice, draft.id)
+        return results, saved.improvements, saved.title
+
+    results, used, title = run(body)
+
+    assert sorted(r for r in results if r is not None) == [1, 2, 3]
+    assert results.count(None) == 2
+    assert (used, title) == (3, "Edited")
+
+
+def test_only_a_draft_can_be_rewritten(run):
+    alice = new_student()
+    posted = handoff(alice, new_thread(alice), status="posted")
+
+    async def body(store):
+        await store.save(posted)
+        return await store.claim_improvement(posted.id, 3)
+
+    assert run(body) is None

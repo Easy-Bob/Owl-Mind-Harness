@@ -10,6 +10,7 @@ from tests.guard_rails import (
     check_ascii_source,
     check_env_access,
     check_forum_access,
+    check_handoff_model_calls,
     check_model_construction,
     check_no_top_level_mcp,
     check_sampling_params,
@@ -68,6 +69,13 @@ def test_repo_follows_the_rule(check):
         ),
         (check_forum_access, "owl_mind/core/factory.py", "import owl_mind.forum.handoff\n"),
         (check_forum_access, "owl_mind/core/a.py", "from owl_mind.forum import github\n"),
+        (check_handoff_model_calls, "owl_mind/forum/handoff.py", "model.ainvoke([])\n"),
+        (
+            check_handoff_model_calls,
+            "owl_mind/forum/a.py",
+            "from owl_mind.core.model import get_chat_model\n",
+        ),
+        (check_handoff_model_calls, "owl_mind/forum/replies.py", "services.get_model('small')\n"),
     ],
 )
 def test_rule_reports_a_deliberate_violation(tmp_path, check, relative, source):
@@ -104,6 +112,8 @@ def test_rule_reports_a_deliberate_violation(tmp_path, check, relative, source):
         (check_ascii_source, ".venv/lib/a.py", "# caf\u00e9\n"),
         (check_forum_access, "owl_mind/api/handoffs.py", "from owl_mind.forum import handoff\n"),
         (check_forum_access, "owl_mind/forum/a.py", "from owl_mind.forum.redact import redact\n"),
+        (check_handoff_model_calls, "owl_mind/forum/improve.py", "model.ainvoke([])\n"),
+        (check_handoff_model_calls, "owl_mind/tools/a.py", "model.ainvoke([])\n"),
     ],
 )
 def test_rule_allows_legal_code(tmp_path, check, relative, source):

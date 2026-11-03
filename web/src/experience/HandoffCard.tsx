@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { api, ApiError, type Handoff, type SimilarPost } from "../shared/api";
+import { api, ApiError, type Handoff, type Rewrite, type SimilarPost } from "../shared/api";
 import { ForumReplies, postAsLabel } from "./ForumReplies";
 
 type Props = {
@@ -16,9 +16,46 @@ export function HandoffCard({ handoff, similar, onChange, onFailure }: Props) {
   const [graded, setGraded] = useState(handoff.graded);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [improveLeft, setImproveLeft] = useState(handoff.improve_left ?? 0);
+  const [suggestion, setSuggestion] = useState<Rewrite | null>(null);
   // Set straight away, so a double click can't send two approvals.
   const busy = useRef(false);
   const [waiting, setWaiting] = useState(false);
+
+  async function improveDraft() {
+    if (busy.current) {
+      return;
+    }
+    busy.current = true;
+    setWaiting(true);
+    setError("");
+    setNotice("");
+    try {
+      const rewrite = await api.improveHandoff(handoff.id, title, body);
+      setSuggestion(rewrite);
+      setImproveLeft(rewrite.remaining);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        onFailure(caught);
+      } else {
+        // An outage hides the button. The student's own draft is untouched either way.
+        if (caught instanceof ApiError && caught.status === 503) {
+          setImproveLeft(0);
+        }
+        setError(caught instanceof Error ? caught.message : "Something went wrong.");
+      }
+    } finally {
+      busy.current = false;
+      setWaiting(false);
+    }
+  }
+
+  function acceptSuggestion(rewrite: Rewrite) {
+    setTitle(rewrite.title);
+    setBody(rewrite.body);
+    setSuggestion(null);
+    setNotice("The rewrite is in the draft now. Check it, then approve.");
+  }
 
   async function act(action: () => Promise<Handoff>) {
     if (busy.current) {
@@ -133,6 +170,36 @@ export function HandoffCard({ handoff, similar, onChange, onFailure }: Props) {
         />
         This is about a graded assignment (only a short excerpt is posted)
       </label>
+      {improveLeft > 0 && !suggestion && (
+        <div className="handoff-improve">
+          <button
+            type="button"
+            disabled={waiting || !title.trim() || !body.trim()}
+            onClick={improveDraft}
+          >
+            Improve with AI
+          </button>
+          <p className="handoff-note">
+            Optional. Sends this text, after private details are removed, to DeepSeek, which stores
+            data in China. Nothing changes until you choose. {improveLeft} left.
+          </p>
+        </div>
+      )}
+      {suggestion && (
+        <div className="handoff-suggestion" role="group" aria-label="Suggested rewrite">
+          <h3>Suggested rewrite</h3>
+          <p className="handoff-suggestion-title">{suggestion.title}</p>
+          <p className="handoff-suggestion-body">{suggestion.body}</p>
+          <div className="handoff-actions">
+            <button type="button" onClick={() => setSuggestion(null)}>
+              Keep mine
+            </button>
+            <button type="button" onClick={() => acceptSuggestion(suggestion)}>
+              Use this version
+            </button>
+          </div>
+        </div>
+      )}
       {notice && (
         <p className="handoff-notice" role="status">
           {notice}
