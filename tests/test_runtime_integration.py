@@ -38,7 +38,7 @@ from owl_mind.services.study_store import PostgresStudyStore
 from owl_mind.worker.telemetry import ensure_group, process_once
 from tests.fake_deepseek import FakeDeepSeek
 from tests.test_filesystem import call, say, task
-from tests.test_runtime import intent, kinds, parse_sse, text_of
+from tests.test_runtime import HINT, intent, kinds, parse_sse, text_of
 
 pytestmark = [pytest.mark.integration, pytest.mark.enable_socket]
 
@@ -348,6 +348,7 @@ def test_full_turn_on_real_services_survives_a_restart():
         call("build_hint", level=1),
         say("report"),
         say("the final answer"),
+        HINT,  # The integrity reviewer passes the practice answer.
     )
     with TestClient(world.app) as client:
         started = client.post("/threads", json={"message": "help"}).json()

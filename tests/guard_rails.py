@@ -369,3 +369,16 @@ ALL_CHECKS = (
     check_forum_access,
     check_handoff_model_calls,
 )
+
+
+CHECKED_KINDS = ("text_delta",)
+
+
+def check_answer_checked_first(events: list[tuple[str, dict]]) -> list[Violation]:
+    """On a checked turn, no answer text reaches the student before the integrity result."""
+    kinds = [kind for kind, _ in events]
+    if "integrity" not in kinds:
+        return [Violation("integrity", "<run>", 0, "the answer was never checked")]
+    first_check = kinds.index("integrity")
+    early = [i for i, kind in enumerate(kinds) if kind in CHECKED_KINDS and i < first_check]
+    return [Violation("integrity", "<run>", i, "text before the check") for i in early]

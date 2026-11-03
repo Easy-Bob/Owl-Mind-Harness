@@ -162,6 +162,10 @@ def telemetry_events(monkeypatch):
 # -- a whole agent turn -----------------------------------------------------
 
 
+# The integrity reviewer's reply for an answer that is only a hint.
+HINT = say('{"verdict": "hint", "reason": "none"}')
+
+
 def tutor_world() -> World:
     return World(
         intent(problem_help=0.9),
@@ -169,6 +173,7 @@ def tutor_world() -> World:
         call("build_hint", level=1),
         say("tutor report text"),
         say("Here is a final answer that is long enough to arrive in several pieces."),
+        HINT,
     )
 
 
@@ -185,6 +190,8 @@ def test_agent_turn_streams_events_in_order():
         "tool_end",
         "subagent_end",
         "usage",
+        "integrity_check",
+        "integrity",
         "done",
     ]
     assert events[-1] == ("done", {"status": "completed"})
@@ -192,7 +199,13 @@ def test_agent_turn_streams_events_in_order():
 
 
 def test_answer_text_arrives_in_pieces_before_the_run_ends():
-    world = tutor_world()
+    # A concept explanation isn't checked, so it streams. Practice answers are held (M3-B).
+    world = World(
+        intent(concept_explain=0.9),
+        task("concept_tutor"),
+        say("tutor report text"),
+        say("Here is a final answer that is long enough to arrive in several pieces."),
+    )
     with world.client() as client:
         events = stream(client, start(client)["run_id"])
 
@@ -241,6 +254,7 @@ def test_every_model_call_is_attributed_to_the_run(telemetry_events):
         "intent",
         "orchestrator",
         "agent:practice_coach",
+        "integrity_reviewer",
     }
 
 
@@ -264,6 +278,7 @@ def test_a_joined_two_tutor_answer_streams_to_the_student_and_is_recorded():
         say("Heaps keep the smallest item on top [cite:x1]."),
         task("quiz_master"),
         say("1. Where is the smallest item?"),
+        HINT,
     )
     with world.client() as client:
         run_id = start(client)["run_id"]
@@ -285,6 +300,7 @@ def test_a_composite_turn_that_falls_back_to_a_rewrite_still_shows_the_answer(mo
         {**task("concept_tutor"), "content": "Let me ask a tutor."},
         say("explanation"),
         say("The quiz tutor isn't needed, here is your answer."),
+        HINT,
     )
     with world.client() as client:
         events = stream(client, start(client)["run_id"])

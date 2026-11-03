@@ -19,6 +19,7 @@ from owl_mind.core.budget import BudgetExceeded, BudgetStop, RunMeter
 from owl_mind.core.config import get_settings
 from owl_mind.core.events import EventBus
 from owl_mind.core.factory import LiveAgentRunsDisabled, build_owl_agent
+from owl_mind.core.integrity import CHECKED_TUTORS, IntegrityCheck, Verdict, fallback, needs_check
 from owl_mind.core.intent.classifier import IntentResult, IntentStep
 from owl_mind.core.intent.followup import needs_earlier, previous_chat
 from owl_mind.core.intent.taxonomy import Reply, Route, TaskKind
@@ -218,7 +219,10 @@ async def _run_agent(
         get_model=services.get_model,
     )
     joins = result.task_kind is TaskKind.COMPOSITE and get_settings().composite_answer == "join"
-    translator = StreamTranslator(hold_until_answer=joins)
+    # Practice and quiz answers are held until the integrity check passes, so a leak never
+    # reaches the screen first.
+    checked = needs_check(result.subagents)
+    translator = StreamTranslator(hold_until_answer=joins or checked, keep_answer=checked)
     context = RunContext(
         student_id=request.student_id,
         store=services.study,
@@ -251,8 +255,61 @@ async def _run_agent(
         for kind, event in translator.flush():
             await emit(kind, event)
         await emit("usage", translator.usage)
+    if checked:
+        await _show_checked(services, request, result, config, emit, meter, translator)
     if result.left_out:
         await emit("text_delta", {"text": replies.left_out_note(result.left_out)})
+
+
+async def _review(
+    check: IntegrityCheck, meter: RunMeter, request: RunRequest, answer: str, config
+) -> Verdict:
+    try:
+        await meter.check()
+    except BudgetStop:
+        # No budget left to check with, so the answer isn't shown.
+        return Verdict(leak=True, reason="unclear", layer="budget")
+    return await check.review(request.message, answer, config)
+
+
+async def _show_checked(
+    services: Services,
+    request: RunRequest,
+    result: IntentResult,
+    config: dict[str, Any],
+    emit: _Emitter,
+    meter: RunMeter,
+    translator: StreamTranslator,
+) -> None:
+    """Show the answer if it passes, else the tutor's one rewrite if that passes, else a hint."""
+    await emit("integrity_check", {})
+    check = IntegrityCheck(services.get_model)
+    answer = translator.answer
+    verdict = await _review(check, meter, request, answer, config)
+    shown, outcome = answer, "passed"
+    if verdict.leak:
+        shown, outcome = fallback(request.message), "blocked"
+        tutor = next(t for t in result.subagents if t in CHECKED_TUTORS)
+        if verdict.layer != "budget":
+            rewrite = await check.rewrite(
+                tutor, request.message, answer, verdict.reason or "unclear", config
+            )
+            if rewrite and not (await _review(check, meter, request, rewrite, config)).leak:
+                shown, outcome = rewrite, "retried"
+    await emit("integrity", {"result": outcome, "reason": verdict.reason, "layer": verdict.layer})
+    if shown != answer:
+        # The thread's history keeps what the student saw, so a blocked answer never returns.
+        await _replace_answer(services.checkpointer, request.thread_id, translator.answer_id, shown)
+    await emit("text_delta", {"text": shown})
+
+
+async def _replace_answer(
+    checkpointer: BaseCheckpointSaver, thread_id: uuid.UUID, answer_id: str | None, text: str
+) -> None:
+    message = AIMessage(text, id=answer_id) if answer_id else AIMessage(text)
+    await _history_graph(checkpointer).aupdate_state(
+        _thread_config(thread_id), {"messages": [message]}, as_node="record"
+    )
 
 
 async def _classify(
