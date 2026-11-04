@@ -160,8 +160,10 @@ def test_three_tutors_get_search_and_the_planner_does_not():
 
 
 def test_prompts_ask_for_citations_and_no_longer_point_at_the_sample_folder():
-    for prompt in (prompts.CONCEPT_TUTOR, prompts.PRACTICE_COACH, prompts.QUIZ_MASTER):
+    # The quiz master's questions are laid out by code, so it doesn't cite.
+    for prompt in (prompts.CONCEPT_TUTOR, prompts.PRACTICE_COACH):
         assert "[cite:ID]" in prompt
+    for prompt in (prompts.CONCEPT_TUTOR, prompts.PRACTICE_COACH, prompts.QUIZ_MASTER):
         assert "/materials/" not in prompt
 
 

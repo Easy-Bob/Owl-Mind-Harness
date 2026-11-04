@@ -1,5 +1,6 @@
 """Course materials and import jobs in the materials schema."""
 
+import json
 import uuid
 from dataclasses import dataclass, replace
 from typing import Any, Protocol, runtime_checkable
@@ -54,6 +55,14 @@ class MaterialsStore(Protocol):
 
     async def delete_document(self, document_id: uuid.UUID) -> bool: ...
 
+    async def set_topics(self, document_id: uuid.UUID, topics: list[str]) -> None: ...
+
+    async def list_topics(self, limit: int = 40) -> list[str]:
+        """Every document's topics together, most common first. A deleted file's topics go."""
+
+    async def documents_without_topics(self) -> list[tuple[uuid.UUID, list[str], list[str]]]:
+        """Each such document's id, headings and opening chunk texts, for the backfill."""
+
     async def list_documents(self) -> list[DocumentInfo]: ...
 
     async def corpus_version(self) -> int: ...
@@ -97,6 +106,7 @@ class InMemoryMaterialsStore:
             "hash": content_hash,
             "source_url": source_url,
             "chunks": list(zip(chunks, vectors, strict=True)),
+            "topics": [],
         }
         self.version += 1
         return document_id
@@ -106,6 +116,20 @@ class InMemoryMaterialsStore:
             return False
         self.version += 1
         return True
+
+    async def set_topics(self, document_id: uuid.UUID, topics: list[str]) -> None:
+        if document_id in self.documents:
+            self.documents[document_id]["topics"] = list(topics)
+
+    async def list_topics(self, limit: int = 40) -> list[str]:
+        return _most_common([d["topics"] for d in self.documents.values()], limit)
+
+    async def documents_without_topics(self) -> list[tuple[uuid.UUID, list[str], list[str]]]:
+        return [
+            (i, [c.heading for c, _ in d["chunks"]], [c.text for c, _ in d["chunks"][:3]])
+            for i, d in self.documents.items()
+            if not d["topics"]
+        ]
 
     async def list_documents(self) -> list[DocumentInfo]:
         return [
@@ -134,6 +158,19 @@ class InMemoryMaterialsStore:
         for job in unfinished:
             await self.update_job(job.id, "failed", "The app restarted during this import.")
         return len(unfinished)
+
+
+def _most_common(per_document: list[list[str]], limit: int) -> list[str]:
+    """Merge topics case-insensitively, keeping the first spelling seen."""
+    counts: dict[str, int] = {}
+    spelling: dict[str, str] = {}
+    for topics in per_document:
+        for topic in dict.fromkeys(t.lower() for t in topics):
+            counts[topic] = counts.get(topic, 0) + 1
+        for topic in topics:
+            spelling.setdefault(topic.lower(), topic)
+    ranked = sorted(counts, key=lambda key: (-counts[key], key))
+    return [spelling[key] for key in ranked[:limit]]
 
 
 _BUMP_VERSION = """
@@ -214,6 +251,43 @@ class PostgresMaterialsStore:
             if deleted is not None:
                 await session.execute(text(_BUMP_VERSION))
         return deleted is not None
+
+    async def set_topics(self, document_id: uuid.UUID, topics: list[str]) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                text(
+                    "UPDATE materials.documents SET topics = CAST(:topics AS jsonb) WHERE id = :id"
+                ),
+                {"id": document_id, "topics": json.dumps(topics)},
+            )
+
+    async def list_topics(self, limit: int = 40) -> list[str]:
+        async with self._sessions() as session:
+            rows = await session.scalars(text("SELECT topics FROM materials.documents"))
+            return _most_common([list(t) for t in rows], limit)
+
+    async def documents_without_topics(self) -> list[tuple[uuid.UUID, list[str], list[str]]]:
+        async with self._sessions() as session:
+            documents = (
+                await session.scalars(
+                    text("SELECT id FROM materials.documents WHERE topics = '[]'::jsonb")
+                )
+            ).all()
+            found = []
+            for document_id in documents:
+                rows = (
+                    await session.execute(
+                        text(
+                            "SELECT heading, text FROM materials.chunks WHERE document_id = :id"
+                            " ORDER BY position"
+                        ),
+                        {"id": document_id},
+                    )
+                ).all()
+                found.append(
+                    (document_id, [r.heading or "" for r in rows], [r.text for r in rows[:3]])
+                )
+        return found
 
     async def list_documents(self) -> list[DocumentInfo]:
         async with self._sessions() as session:

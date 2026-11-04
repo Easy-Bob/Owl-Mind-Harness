@@ -203,7 +203,21 @@ async def _fixed_reply(
         text = replies.progress(*counts)
     else:
         text = replies.TEXT[result.reply]
+        if result.reply in replies.WITH_HELP:
+            text += "\n\n" + replies.help_text(await course_topics(services))
     return text + (replies.left_out_note(result.left_out) if result.left_out else "")
+
+
+async def course_topics(services: Services) -> list[str]:
+    """The topics of the imported course notes. A lookup failure only shortens the help."""
+    store = getattr(services.ingestor, "store", None)
+    if store is None:
+        return []
+    try:
+        return await store.list_topics()
+    except Exception as exc:
+        logger.warning("Topics unavailable: %s", type(exc).__name__)
+        return []
 
 
 async def _run_agent(
@@ -225,7 +239,9 @@ async def _run_agent(
         checkpointer=services.checkpointer,
         get_model=services.get_model,
     )
-    joins = result.task_kind is TaskKind.COMPOSITE and get_settings().composite_answer == "join"
+    joins = result.task_kind is TaskKind.ASSESS or (
+        result.task_kind is TaskKind.COMPOSITE and get_settings().composite_answer == "join"
+    )
     # Practice and quiz answers are held until the integrity check passes, so a leak never
     # reaches the screen first.
     checked = needs_check(result.subagents)
@@ -271,7 +287,9 @@ async def _run_agent(
         await _ask_approval(services, request, result, emit, translator.interrupt)
         return True
     if checked:
-        await _show_checked(services, request, result, config, emit, meter, translator)
+        await _show_checked(
+            services, request, result, config, emit, meter, translator, context.posted_quizzes
+        )
     if result.left_out:
         await emit("text_delta", {"text": replies.left_out_note(result.left_out)})
     return False
@@ -338,22 +356,33 @@ async def _show_checked(
     emit: _Emitter,
     meter: RunMeter,
     translator: StreamTranslator,
+    quizzes: list[str] = (),
 ) -> None:
     """Show the answer if it passes, else the tutor's one rewrite if that passes, else a hint."""
     await emit("integrity_check", {})
     check = IntegrityCheck(services.get_model)
     answer = translator.answer
-    verdict = await _review(check, meter, request, answer, config)
+    # A code-made quiz shows its answers by the owner's decision, so only the rest is reviewed.
+    rest = answer
+    for quiz in quizzes:
+        rest = rest.replace(quiz, "")
+    quiz_text = "\n\n".join(quizzes)
+    if quizzes and not rest.strip():
+        verdict = Verdict(leak=False, layer="quiz")
+    else:
+        verdict = await _review(check, meter, request, rest.strip(), config)
     shown, outcome = answer, "passed"
     if verdict.leak:
         shown, outcome = fallback(request.message), "blocked"
         tutor = next(t for t in result.subagents if t in CHECKED_TUTORS)
         if verdict.layer != "budget":
             rewrite = await check.rewrite(
-                tutor, request.message, answer, verdict.reason or "unclear", config
+                tutor, request.message, rest.strip(), verdict.reason or "unclear", config
             )
             if rewrite and not (await _review(check, meter, request, rewrite, config)).leak:
-                shown, outcome = rewrite, "retried"
+                # The quiz stays as code made it, after the rewritten part.
+                shown = f"{rewrite}\n\n{quiz_text}" if quizzes else rewrite
+                outcome = "retried"
     await emit("integrity", {"result": outcome, "reason": verdict.reason, "layer": verdict.layer})
     if shown != answer:
         # The thread's history keeps what the student saw, so a blocked answer never returns.

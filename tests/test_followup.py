@@ -42,6 +42,23 @@ def test_a_message_with_its_own_topic_or_no_pointing_word_does_not(message):
     assert not needs_earlier(message)
 
 
+@pytest.mark.parametrize("message", ["yes", "ok", "sure", "no"])
+def test_a_bare_reply_is_classified_on_its_own(message):
+    assert not needs_earlier(message)
+
+
+def test_the_previous_chat_is_cut_to_200_characters_from_the_start():
+    history = [
+        {"role": "user", "content": "explain Bloom filters " * 20},
+        {"role": "assistant", "content": "A Bloom filter is a bit array. " + "x" * 1000},
+    ]
+
+    student, tutor = previous_chat(history)
+
+    assert len(student) == len(tutor) == EARLIER_CHARS == 200
+    assert tutor.startswith("A Bloom filter is a bit array.")
+
+
 def test_the_previous_chat_is_the_last_exchange_trimmed():
     history = [
         {"role": "user", "content": "old question"},

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { MAX_MESSAGE_CHARS } from "../shared/api";
-import { Message } from "./Message";
+import { Message, numberCitations } from "./Message";
 import { followRun, type RunUpdate } from "./runStream";
 
 class FakeEventSource {
@@ -156,6 +156,58 @@ describe("Message", () => {
     expect(container.querySelector("a")?.getAttribute("href") ?? "").not.toContain("javascript");
   });
 
+  it("numbers each distinct citation in the order it first appears", () => {
+    expect(numberCitations("A [cite:x1]. B [cite:y2]. A again [cite:x1].")).toEqual({
+      text: "A [1]. B [2]. A again [1].",
+      ids: ["x1", "y2"],
+    });
+  });
+
+  it("lists the sources of a finished answer, linked where the notes have a URL", async () => {
+    const calls = fakeServer({
+      "GET /citations?ids=x1%2Cy2%2Cz3": {
+        body: {
+          x1: { title: "Lecture 6", location: "slide 3", url: "https://example.edu/l6" },
+          y2: { title: "Scribe notes", location: "page 2", url: null },
+          z3: null,
+        },
+      },
+    });
+    render(<Message role="assistant" content="A [cite:x1], B [cite:y2], C [cite:z3]." />);
+
+    const sources = await screen.findByRole("list", { name: "Sources" });
+    await waitFor(() => expect(sources).toHaveTextContent("Lecture 6, slide 3"));
+    expect(screen.getByRole("link", { name: "Lecture 6, slide 3" })).toHaveAttribute(
+      "href",
+      "https://example.edu/l6",
+    );
+    expect(sources).toHaveTextContent("Scribe notes, page 2");
+    expect(sources).toHaveTextContent("source not found");
+    expect(screen.getByText(/A \[1\], B \[2\], C \[3\]/)).toBeVisible();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("says the sources are unavailable when the lookup fails, instead of waiting forever", async () => {
+    fakeServer({ "GET /citations?ids=x1": { status: 500, body: {} } });
+    render(<Message role="assistant" content="A [cite:x1]" />);
+
+    expect(await screen.findByText("Sources unavailable right now.")).toBeVisible();
+  });
+
+  it("doesn't look up sources while an answer is still arriving", () => {
+    const calls = fakeServer({});
+    render(<Message role="assistant" content="A [cite:x1]" final={false} />);
+
+    expect(calls).toHaveLength(0);
+    expect(screen.getByRole("list", { name: "Sources" })).toHaveTextContent("…");
+  });
+
+  it("shows no sources for an answer without citations", () => {
+    render(<Message role="assistant" content="No notes needed." />);
+
+    expect(screen.queryByRole("list", { name: "Sources" })).toBeNull();
+  });
+
   it("shows a student's text as plain text", () => {
     const { container } = render(<Message role="user" content="**not bold** <b>x</b>" />);
 
@@ -278,6 +330,25 @@ describe("App", () => {
 
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(calls.some((call) => call.key === "POST /threads")).toBe(false);
+  });
+
+  it("shows what can be asked and the course topics in an empty chat", async () => {
+    fakeServer({
+      ...loggedIn,
+      "GET /help": {
+        body: {
+          can_help_with: [{ what: "Quiz you", example: "give me a short quiz on sorting" }],
+          cannot: "I can't answer other subjects.",
+          topics: ["Bloom filters", "Chernoff bounds"],
+        },
+      },
+    });
+    render(<App />);
+
+    const help = await screen.findByRole("region", { name: "What you can ask" });
+    await waitFor(() => expect(help).toHaveTextContent("Bloom filters, Chernoff bounds"));
+    expect(help).toHaveTextContent("Quiz you: give me a short quiz on sorting");
+    expect(help).toHaveTextContent("I can't answer other subjects.");
   });
 
   it("shows an empty state for a user with no sessions", async () => {

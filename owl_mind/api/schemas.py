@@ -5,7 +5,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-MAX_MESSAGE_CHARS = 4000
+# Owner's decision: short questions. Pasted code or long answers don't fit.
+MAX_MESSAGE_CHARS = 200
 
 
 class MessageIn(BaseModel):

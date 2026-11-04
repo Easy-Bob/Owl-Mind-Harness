@@ -30,7 +30,6 @@ ARGUMENT_CHARS: dict[tuple[str, str], int] = {
     ("materials_search", "query"): 300,
     ("task", "description"): 4000,
     ("analyze_complexity", "code"): 8000,
-    ("grade_answer", "answer"): 4000,
     ("write_file", "content"): 8000,
     ("edit_file", "new_string"): 8000,
     ("edit_file", "old_string"): 8000,
@@ -336,10 +335,13 @@ class JoinAnswerMiddleware(AgentMiddleware):
                     found[tutor] = text
         return found
 
-    def joined(self, messages: Sequence[Any]) -> str | None:
+    def joined(self, messages: Sequence[Any], quizzes: Sequence[str] = ()) -> str | None:
         found = self._replies(messages)
         if not all(tutor in found for tutor in self.tutors):
             return None
+        if quizzes and "quiz_master" in found:
+            # The code-made quiz, exactly, in place of the tutor's own line about it.
+            found["quiz_master"] = "\n\n".join(quizzes)
         parts = [found[self.tutors[0]]]
         parts += [f"{replies.JOIN_LEADS.get(t, '')}\n\n{found[t]}".strip() for t in self.tutors[1:]]
         return "\n\n".join(parts)
@@ -348,7 +350,9 @@ class JoinAnswerMiddleware(AgentMiddleware):
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelResponse]]
     ) -> ModelResponse:
         # The state holds every message, even ones a summary has replaced in the request.
-        text = self.joined(request.state.get("messages", request.messages))
+        context = getattr(request.runtime, "context", None)
+        quizzes = getattr(context, "posted_quizzes", None) or ()
+        text = self.joined(request.state.get("messages", request.messages), quizzes)
         if text is None:
             return await handler(request)
         record = getattr(getattr(request.runtime, "context", None), "record", None)

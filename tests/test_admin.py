@@ -220,7 +220,7 @@ def test_template_settled_by_the_llm_records_one_intent_call_only():
         events = stream(client, started["run_id"])
 
     assert run_of(world, started).route == "template"
-    assert text_of(events) == replies.TEXT[runtime.Reply.OFF_TOPIC]
+    assert text_of(events).startswith(replies.TEXT[runtime.Reply.OFF_TOPIC])
     assert len(world.fake.requests) == 1
 
 

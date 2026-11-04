@@ -14,6 +14,7 @@ from langgraph.store.memory import InMemoryStore
 from owl_mind.api import routes
 from owl_mind.api.app import create_app
 from owl_mind.api.deps import current_student
+from owl_mind.api.schemas import MAX_MESSAGE_CHARS
 from owl_mind.core import replies, runtime, telemetry
 from owl_mind.core.budget import InMemoryBudgetLedger
 from owl_mind.core.config import get_settings
@@ -375,7 +376,7 @@ def test_low_confidence_gets_a_clarifying_question_and_builds_no_agent():
     with world.client() as client:
         events = stream(client, start(client, "trees")["run_id"])
 
-    assert text_of(events) == replies.TEXT[runtime.Reply.CLARIFY]
+    assert text_of(events).startswith(replies.TEXT[runtime.Reply.CLARIFY])
     assert len(world.fake.requests) == 1
 
 
@@ -406,7 +407,10 @@ def test_blank_first_message_starts_no_thread(message):
 def test_oversized_message_is_refused_before_any_model_call():
     world = World()
     with world.client() as client:
-        assert client.post("/threads", json={"message": "x" * 4001}).status_code == 422
+        assert (
+            client.post("/threads", json={"message": "x" * (MAX_MESSAGE_CHARS + 1)}).status_code
+            == 422
+        )
 
     assert world.fake.requests == []
 
@@ -415,7 +419,7 @@ def test_message_at_the_limit_is_accepted():
     world = World()
     with world.client() as client:
         world.fake.replies.append(intent(concept_explain=0.4))
-        assert client.post("/threads", json={"message": "x" * 4000}).status_code == 201
+        assert client.post("/threads", json={"message": "x" * MAX_MESSAGE_CHARS}).status_code == 201
 
 
 def test_blank_message_in_a_thread_gets_a_rule_reply_with_no_model_call():
@@ -446,7 +450,7 @@ def test_title_is_cut_from_the_first_message_with_no_model_call():
 def test_long_title_is_cut():
     world = World(intent(concept_explain=0.4))
     with world.client() as client:
-        stream(client, start(client, "word " * 50)["run_id"])
+        stream(client, start(client, "word " * 30)["run_id"])
         title = client.get("/threads").json()[0]["title"]
 
     assert len(title) == 60
@@ -732,7 +736,7 @@ def test_stuck_intent_call_gets_a_clarifying_question(monkeypatch):
     with world.client() as client:
         events = stream(client, start(client, "trees")["run_id"])
 
-    assert text_of(events) == replies.TEXT[runtime.Reply.CLARIFY]
+    assert text_of(events).startswith(replies.TEXT[runtime.Reply.CLARIFY])
     assert events[-1] == ("done", {"status": "completed"})
 
 

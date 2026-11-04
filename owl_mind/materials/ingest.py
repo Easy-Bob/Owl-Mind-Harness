@@ -10,6 +10,7 @@ from owl_mind.materials.chunking import chunk_sections, looks_like_solution
 from owl_mind.materials.embedding import Embedder
 from owl_mind.materials.extract import ExtractionError, extract_isolated, file_format
 from owl_mind.materials.store import DuplicateDocument, MaterialsStore
+from owl_mind.materials.topics import TopicNamer
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +18,15 @@ SOLUTION_REFUSED = "This looks like a solution or answer key, which can't be imp
 
 
 class Ingestor:
-    def __init__(self, store: MaterialsStore, embedder: Embedder, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        store: MaterialsStore,
+        embedder: Embedder,
+        timeout_seconds: float,
+        namer: TopicNamer | None = None,
+    ) -> None:
         self.store = store
+        self._namer = namer
         self._embedder = embedder
         self._timeout = timeout_seconds
         self._one_at_a_time = asyncio.Semaphore(1)
@@ -71,8 +79,16 @@ class Ingestor:
         vectors = await asyncio.to_thread(self._embedder.embed, [chunk.text for chunk in chunks])
         title = PurePath(filename).stem.replace("_", " ")
         try:
-            return await self.store.save_document(
+            document_id = await self.store.save_document(
                 title, file_type, content_hash, source_url, uploaded_by, chunks, vectors
             )
         except DuplicateDocument as duplicate:
             return duplicate.document_id
+        if self._namer is not None:
+            # After the save, so a failed call never loses the import.
+            topics = await self._namer.name(
+                [c.heading for c in chunks], [c.text for c in chunks[:3]]
+            )
+            if topics:
+                await self.store.set_topics(document_id, topics)
+        return document_id

@@ -101,7 +101,9 @@ def _template(reply: Reply, description: str, example: str) -> IntentSpec:
 
 
 INTENTS: dict[Intent, IntentSpec] = {
-    Intent.CONCEPT_EXPLAIN: _learn("explain a concept", "how does a hash table resolve collisions"),
+    Intent.CONCEPT_EXPLAIN: _learn(
+        "explain a computer-science concept", "how does a hash table resolve collisions"
+    ),
     Intent.CONCEPT_COMPARE: _learn("compare concepts", "stack or queue, when do I use each"),
     Intent.MATERIAL_SEARCH: _learn("find course material", "which lecture covers paging"),
     Intent.PROBLEM_HELP: _practice("stuck on a problem", "I can't start this graph problem"),
@@ -134,7 +136,15 @@ INTENTS: dict[Intent, IntentSpec] = {
     Intent.FEEDBACK: _template(
         Reply.FEEDBACK, "comment on the assistant", "that last hint was unhelpful"
     ),
-    Intent.OTHER: _template(Reply.OFF_TOPIC, "unrelated to studying", "recommend a movie"),
+    # Owner's rule: anything that isn't computer science gets the off-topic reply, including
+    # simple arithmetic and other subjects, so no agent runs on it.
+    Intent.OTHER: _template(
+        Reply.OFF_TOPIC,
+        "not about computer science, such as everyday arithmetic, other subjects or general "
+        "knowledge. Maths inside computer science, such as binary, logic or complexity, is not "
+        "other",
+        "tell me how to calculate 1 + 1",
+    ),
 }
 
 

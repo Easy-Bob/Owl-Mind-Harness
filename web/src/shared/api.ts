@@ -1,6 +1,6 @@
 // The server API. The login token lives in an HttpOnly cookie, so no code here can read it.
 
-export const MAX_MESSAGE_CHARS = 4000;
+export const MAX_MESSAGE_CHARS = 200;
 
 export type User = { email: string; role: string };
 export type Thread = { id: string; title: string; created_at: string };
@@ -35,6 +35,12 @@ export type Handoff = {
   // AI rewrites left for this draft. 0 hides the button.
   improve_left?: number;
 };
+export type Help = {
+  can_help_with: { what: string; example: string }[];
+  cannot: string;
+  topics: string[];
+};
+export type Citation = { title: string; location: string; url: string | null };
 export type Approval = {
   id: string;
   run_id: string;
@@ -122,6 +128,11 @@ export const api = {
     request<Rewrite>(`/handoffs/${id}/improve`, { title, body }),
   unreadReplies: () => request<Record<string, number>>("/handoffs/unread"),
   markRepliesSeen: (id: string) => request<void>(`/handoffs/${id}/seen`, {}),
+  help: () => request<Help>("/help"),
+  citations: (ids: string[]) =>
+    request<Record<string, Citation | null>>(
+      `/citations?ids=${encodeURIComponent(ids.join(","))}`,
+    ),
   approval: (threadId: string) => request<Approval>(`/threads/${threadId}/approval`),
   approveRun: (runId: string) => request<RunStarted>(`/runs/${runId}/approve`, {}),
   rejectRun: (runId: string) => request<RunStarted>(`/runs/${runId}/reject`, {}),
