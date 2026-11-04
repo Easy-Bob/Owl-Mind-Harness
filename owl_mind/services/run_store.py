@@ -12,7 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from owl_mind.services.models import Run, RunEvent, Thread
 
+# Left unfinished by a restart, so failed at startup.
 UNFINISHED = ("queued", "running")
+# Waiting for the student's approval. It survives a restart and holds the student's slot.
+WAITING = "waiting_approval"
+BUSY = (*UNFINISHED, WAITING)
 FINISHED = ("completed", "failed", "stopped")
 
 
@@ -89,7 +93,7 @@ class InMemoryRunStore:
 
     async def create_run(self, thread_id: uuid.UUID) -> uuid.UUID:
         student = self.threads[thread_id][0]
-        busy = {self.threads[r.thread_id][0] for r in self.runs.values() if r.status in UNFINISHED}
+        busy = {self.threads[r.thread_id][0] for r in self.runs.values() if r.status in BUSY}
         if student in busy:
             raise ActiveRunExists
         run_id = uuid.uuid4()

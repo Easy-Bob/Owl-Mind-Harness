@@ -51,6 +51,10 @@ class Thread(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+# A run waiting for the student's approval holds its slot, like one that is running.
+_BUSY = "status IN ('queued', 'running', 'waiting_approval')"
+
+
 class Run(Base):
     __tablename__ = "runs"
     __table_args__ = (
@@ -58,14 +62,14 @@ class Run(Base):
             "ix_app_runs_one_active_per_thread",
             "thread_id",
             unique=True,
-            postgresql_where=text("status IN ('queued', 'running')"),
+            postgresql_where=text(_BUSY),
         ),
         # One at a time for a student too, so a second chat can't double their spending.
         Index(
             "ix_app_runs_one_active_per_student",
             "student_id",
             unique=True,
-            postgresql_where=text("status IN ('queued', 'running')"),
+            postgresql_where=text(_BUSY),
         ),
     )
 
@@ -225,3 +229,31 @@ class ForumAccount(Base):
     needs_reconnect: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Approval(Base):
+    """A change to a student's plan or progress, waiting for their answer on a card."""
+
+    __tablename__ = "approvals"
+    __table_args__ = (
+        Index(
+            "ix_app_approvals_one_pending_per_student",
+            "student_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"))
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("students.id"))
+    thread_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("threads.id"))
+    kind: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(Text)
+    items: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    setup: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(Text)
+    resume_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("runs.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import START, StateGraph
 from langgraph.store.base import BaseStore
+from langgraph.types import Command
 
 from owl_mind.core import replies, telemetry
 from owl_mind.core.budget import BudgetExceeded, BudgetStop, RunMeter
@@ -22,7 +23,7 @@ from owl_mind.core.factory import LiveAgentRunsDisabled, build_owl_agent
 from owl_mind.core.integrity import CHECKED_TUTORS, IntegrityCheck, Verdict, fallback, needs_check
 from owl_mind.core.intent.classifier import IntentResult, IntentStep
 from owl_mind.core.intent.followup import needs_earlier, previous_chat
-from owl_mind.core.intent.taxonomy import Reply, Route, TaskKind
+from owl_mind.core.intent.taxonomy import Intent, Reply, Route, Subagent, TaskKind
 from owl_mind.core.limits import RUN_LIMITS, RunLimit  # noqa: F401  RunLimit is imported from here.
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.prompts import PROMPT_VERSION
@@ -30,7 +31,7 @@ from owl_mind.core.streaming import STREAM_MODES, StreamTranslator
 from owl_mind.forum.handoff import known_values
 from owl_mind.services.accounts import AccountStore, LoginLimiter
 from owl_mind.services.admin_store import AdminStore
-from owl_mind.services.run_store import RunStore
+from owl_mind.services.run_store import WAITING, RunStore
 from owl_mind.services.study_store import StudyStore
 from owl_mind.tools.context import RunContext
 
@@ -56,6 +57,8 @@ class Services:
     improver: Any = None
     # A BudgetLedger. Without one no agent runs, because budgets fail closed.
     budgets: Any = None
+    # An ApprovalStore. Without one, a change that needs approval fails the run.
+    approvals: Any = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,9 @@ class RunRequest:
     thread_id: uuid.UUID
     student_id: uuid.UUID
     message: str
+    # Set when the run resumes a paused one: the student's decision and the paused run's setup.
+    resume: dict[str, Any] | None = None
+    setup: dict[str, Any] | None = None
 
 
 class _RunStopped(Exception):
@@ -207,7 +213,8 @@ async def _run_agent(
     config: dict[str, Any],
     emit: _Emitter,
     meter: RunMeter,
-) -> None:
+) -> bool:
+    """Run the agent. True if it paused for the student's approval."""
     limit = RUN_LIMITS[result.task_kind]
     meter.run_tokens = limit.tokens
     agent = build_owl_agent(
@@ -230,8 +237,13 @@ async def _run_agent(
         search=services.search,
         record=emit,
     )
+    start = (
+        Command(resume=request.resume)
+        if request.resume is not None
+        else {"messages": [HumanMessage(request.message)]}
+    )
     stream = agent.astream(
-        {"messages": [HumanMessage(request.message)]},
+        start,
         config=config,
         context=context,
         stream_mode=STREAM_MODES,
@@ -255,10 +267,56 @@ async def _run_agent(
         for kind, event in translator.flush():
             await emit(kind, event)
         await emit("usage", translator.usage)
+    if translator.interrupt is not None:
+        await _ask_approval(services, request, result, emit, translator.interrupt)
+        return True
     if checked:
         await _show_checked(services, request, result, config, emit, meter, translator)
     if result.left_out:
         await emit("text_delta", {"text": replies.left_out_note(result.left_out)})
+    return False
+
+
+def _setup(result: IntentResult) -> dict[str, Any]:
+    return {
+        "task_kind": result.task_kind.value,
+        "subagents": [s.value for s in result.subagents],
+        "left_out": [i.value for i in result.left_out],
+    }
+
+
+def _from_setup(setup: dict[str, Any]) -> IntentResult:
+    return IntentResult(
+        route=Route.ORCHESTRATED,
+        task_kind=TaskKind(setup["task_kind"]),
+        subagents=tuple(Subagent(s) for s in setup["subagents"]),
+        left_out=tuple(Intent(i) for i in setup.get("left_out", [])),
+    )
+
+
+async def _ask_approval(
+    services: Services,
+    request: RunRequest,
+    result: IntentResult,
+    emit: _Emitter,
+    asked: dict[str, Any],
+) -> None:
+    """Save what the tool asked, and show the student the card. The run then waits."""
+    if services.approvals is None:
+        raise RuntimeError("No approval store, so no change can be approved")
+    approval = await services.approvals.create(
+        request.run_id, request.student_id, request.thread_id, asked, _setup(result)
+    )
+    await emit("approval", {"step": "requested", "kind": approval.kind})
+    await emit(
+        "approval_request",
+        {
+            "id": str(approval.id),
+            "kind": approval.kind,
+            "summary": approval.summary,
+            "items": approval.items,
+        },
+    )
 
 
 async def _review(
@@ -335,15 +393,21 @@ async def execute_run(services: Services, request: RunRequest) -> None:
         },
         "callbacks": [meter],
     }
+    waiting = False
     try:
         await services.runs.set_run_status(request.run_id, "running")
-        result, closed = await _classify(services, request, config, meter)
+        if request.setup is not None:
+            # A resumed run continues the paused turn, so the intent step isn't asked again.
+            result, closed = _from_setup(request.setup), None
+            await meter.daily()
+        else:
+            result, closed = await _classify(services, request, config, meter)
         if result is None or (closed and result.route is Route.ORCHESTRATED):
             raise closed
         await services.runs.set_run_setup(request.run_id, result.route.value, _kind(result))
         if result.route is Route.ORCHESTRATED:
             try:
-                await _run_agent(services, request, result, config, emit, meter)
+                waiting = await _run_agent(services, request, result, config, emit, meter)
             except LiveAgentRunsDisabled:
                 await _answer(services, request, replies.AGENTS_UNAVAILABLE, emit)
         else:
@@ -364,7 +428,8 @@ async def execute_run(services: Services, request: RunRequest) -> None:
         logger.warning("Run failed: %s", type(exc).__name__)
         await _finish(services, request, "failed", emit, "error", message=replies.RUN_FAILED)
     else:
-        await _finish(services, request, "completed", emit, "done")
+        status = WAITING if waiting else "completed"
+        await _finish(services, request, status, emit, "done")
 
 
 async def _finish(

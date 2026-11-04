@@ -98,6 +98,11 @@ class Run:
         raise AssertionError("no task tool")
 
 
+def tool_messages_of(run: Run) -> list[str]:
+    """Every tool result any agent received, from the requests it sent."""
+    return [m["content"] for r in run.fake.requests for m in r["messages"] if m["role"] == "tool"]
+
+
 def tool_results(result) -> list[str]:
     return [m.content for m in result["messages"] if m.type == "tool"]
 
@@ -233,29 +238,30 @@ def test_steps_are_chosen_by_the_model_in_either_order():
 def test_tools_in_a_subagent_read_the_student_from_context():
     run = Run(
         task("study_planner"),
-        call("schedule_review", topic="bfs", quality=5),
-        say("scheduled"),
+        call("propose_study_plan", title="Week 1", items=[{"topic": "bfs"}]),
+        say("proposed"),
         say("final"),
     )
 
     run.invoke(TaskKind.PLAN, [Subagent.STUDY_PLANNER])
 
-    assert (ALICE, "bfs") in run.store.reviews
+    assert [owner for owner, _ in run.store.plans.values()] == [ALICE]
 
 
 def test_student_cannot_be_set_through_a_tool_argument():
     other = uuid.UUID(int=2)
     run = Run(
         task("study_planner"),
-        call("schedule_review", topic="bfs", quality=5, student_id=str(other), today="2020-01-01"),
-        say("scheduled"),
+        call("preview_review_dates", topics=["bfs"], student_id=str(other), today="2020-01-01"),
+        say("previewed"),
         say("final"),
     )
 
     run.invoke(TaskKind.PLAN, [Subagent.STUDY_PLANNER])
 
-    assert (other, "bfs") not in run.store.reviews
-    assert run.store.reviews[(ALICE, "bfs")].due_date.year == TODAY.year
+    # The extra arguments are dropped: the tool used the context's student and date.
+    [result] = [m for m in tool_messages_of(run) if "dates" in m]
+    assert '"bfs": "2026-11-02"' in result
 
 
 def test_components_and_token_caps_are_set_per_agent():

@@ -319,6 +319,11 @@ textarea:focus-visible {
   align-items: center;
 }
 
+.approval-items {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
 .handoff-actions {
   display: flex;
   gap: 8px;
