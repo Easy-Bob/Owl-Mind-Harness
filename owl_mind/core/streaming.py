@@ -31,6 +31,8 @@ class StreamTranslator:
     keep_answer: bool = False
     answer: str = ""
     answer_id: str | None = None
+    # What a tool's interrupt asked the student, when the run paused for their approval.
+    interrupt: dict[str, Any] | None = None
     _buffer: str = ""
     _held: str = ""
 
@@ -66,6 +68,8 @@ class StreamTranslator:
     def _updates(self, namespace, data: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
         events: list[tuple[str, dict[str, Any]]] = []
         for node, update in data.items():
+            if node == "__interrupt__" and not namespace and update:
+                self.interrupt = getattr(update[0], "value", None)
             if not isinstance(update, dict):
                 continue
             if node == "model":

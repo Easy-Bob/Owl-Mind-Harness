@@ -19,6 +19,9 @@ _SAFE_EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     "budget_step": ("step", "percent"),
     "answer": ("mode", "parts"),
     "integrity": ("result", "reason", "layer"),
+    # The kind only: the summary and items name the student's topics.
+    "approval": ("step", "kind"),
+    "approval_request": ("kind",),
 }
 
 # Handoff events are checked value by value, because any free text could be a student's.

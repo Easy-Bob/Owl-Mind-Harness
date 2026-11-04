@@ -11,7 +11,12 @@ from owl_mind.services.sm2 import sm2
 from owl_mind.services.study_store import InMemoryStudyStore, PinnedRubric, ReviewState
 from owl_mind.tools.concept import _PREREQUISITES, chain_for
 from owl_mind.tools.context import RunContext
-from owl_mind.tools.planner import PlanItem, get_due_topics, propose_study_plan, schedule_review
+from owl_mind.tools.planner import (
+    PlanItem,
+    get_due_topics,
+    preview_review_dates,
+    propose_study_plan,
+)
 from owl_mind.tools.practice import MAX_LEVEL, all_hints, analyze, build_hint
 from owl_mind.tools.quiz import RubricPoint, generate_quiz_spec, grade_answer, pin_rubric
 
@@ -114,40 +119,51 @@ def test_complexity_result_states_its_limits():
     assert "does not run" in analyze("x = 1")["caveat"]
 
 
-# -- schedule_review --------------------------------------------------------
+# -- preview_review_dates ---------------------------------------------------
 
 
-def test_schedule_equals_the_sm2_calculation_and_ignores_no_state(store):
-    first = call(schedule_review, store, topic="BFS", quality=4)
-    second = call(schedule_review, store, topic="bfs", quality=4)
+def test_preview_gives_due_dates_and_today_for_new_topics_and_saves_nothing(store):
+    store.reviews[(ALICE, "bfs")] = ReviewState(2.5, 6, 2, date(2026, 11, 9))
 
-    assert (
-        first["due_date"]
-        == sm2(quality=4, ease=2.5, interval=0, repetitions=0, today=TODAY)["due_date"]
+    result = call(preview_review_dates, store, topics=["BFS", "heaps"])
+
+    assert result["dates"] == {"bfs": "2026-11-09", "heaps": "2026-11-02"}
+    assert set(store.reviews) == {(ALICE, "bfs")}
+
+
+def test_preview_has_no_argument_for_a_date_or_quality():
+    assert set(preview_review_dates.args) == {"topics"}
+
+
+# -- recall from graded answers -----------------------------------------------
+
+
+@pytest.mark.parametrize(("checks", "quality"), [({"a": True, "b": True}, 5), ({}, 0)])
+def test_a_graded_answer_records_recall_from_its_own_mark(store, checks, quality):
+    rubric = pinned(store)
+
+    call(grade_answer, store, rubric_id=rubric["rubric_id"], answer="x", checks=checks)
+
+    expected = sm2(quality=quality, ease=2.5, interval=0, repetitions=0, today=TODAY)
+    saved = store.reviews[(ALICE, "bfs")]
+    assert (saved.due_date.isoformat(), saved.repetitions) == (
+        expected["due_date"],
+        expected["repetitions"],
     )
-    assert (
-        second["due_date"]
-        == sm2(quality=4, ease=first["ease"], interval=1, repetitions=1, today=TODAY)["due_date"]
-    )
-    assert second["repetitions"] == 2
 
 
-def test_schedule_has_no_argument_for_a_date_ease_or_interval():
-    assert set(schedule_review.args) == {"topic", "quality"}
+def test_the_same_answer_graded_again_records_recall_once(store):
+    rubric = pinned(store)
+    for _ in range(2):
+        call(
+            grade_answer,
+            store,
+            rubric_id=rubric["rubric_id"],
+            answer="x",
+            checks={"a": True, "b": True},
+        )
 
-
-@pytest.mark.parametrize(("asked", "lapsed"), [(-5, True), (2, True), (3, False), (99, False)])
-def test_quality_is_limited_to_the_sm2_range(store, asked, lapsed):
-    assert call(schedule_review, store, topic="bfs", quality=asked)["lapsed"] is lapsed
-
-
-def test_lapse_resets_the_ladder(store):
-    call(schedule_review, store, topic="bfs", quality=5)
-    call(schedule_review, store, topic="bfs", quality=5)
-
-    result = call(schedule_review, store, topic="bfs", quality=1)
-
-    assert (result["repetitions"], result["interval"]) == (0, 1)
+    assert store.reviews[(ALICE, "bfs")].repetitions == 1
 
 
 # -- get_due_topics ---------------------------------------------------------
@@ -158,14 +174,14 @@ def test_new_student_has_nothing_due(store):
 
 
 def test_due_topics_are_most_overdue_first(store):
-    call(schedule_review, store, topic="later", quality=5, today=date(2026, 10, 30))
-    call(schedule_review, store, topic="sooner", quality=5, today=date(2026, 10, 1))
+    store.reviews[(ALICE, "later")] = ReviewState(2.5, 1, 1, date(2026, 10, 31))
+    store.reviews[(ALICE, "sooner")] = ReviewState(2.5, 1, 1, date(2026, 10, 2))
 
     assert call(get_due_topics, store)["due"] == ["sooner", "later"]
 
 
 def test_one_student_cannot_see_anothers_due_topics(store):
-    call(schedule_review, store, student=ALICE, topic="bfs", quality=5, today=date(2026, 10, 1))
+    store.reviews[(ALICE, "bfs")] = ReviewState(2.5, 1, 1, date(2026, 10, 2))
 
     assert call(get_due_topics, store, student=BOB)["due"] == []
 
@@ -174,8 +190,8 @@ def test_one_student_cannot_see_anothers_due_topics(store):
 
 
 def test_plan_dates_come_from_code_and_it_is_only_proposed(store):
-    call(schedule_review, store, topic="bfs", quality=5)
-    due = asyncio.run(store.get_review(ALICE, "bfs")).due_date
+    store.reviews[(ALICE, "bfs")] = ReviewState(2.5, 1, 1, date(2026, 11, 3))
+    due = date(2026, 11, 3)
 
     result = call(
         propose_study_plan,

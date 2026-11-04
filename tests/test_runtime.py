@@ -25,6 +25,7 @@ from owl_mind.core.model import get_chat_model
 from owl_mind.core.runtime import RUN_LIMITS, RunLimit, RunRequest, Services, execute_run
 from owl_mind.core.streaming import FLUSH_CHARS, StreamTranslator
 from owl_mind.services.accounts import InMemoryAccountStore, InMemoryLoginLimiter
+from owl_mind.services.approvals import InMemoryApprovalStore
 from owl_mind.services.run_store import InMemoryRunStore
 from owl_mind.services.study_store import InMemoryStudyStore, ReviewState
 from tests.fake_deepseek import FakeDeepSeek
@@ -83,6 +84,7 @@ class World:
         self.limiter = InMemoryLoginLimiter()
         self.admin = FakeAdminStore()
         self.budgets = InMemoryBudgetLedger()
+        self.approvals = InMemoryApprovalStore()
         self.services = Services(
             admin=self.admin,
             accounts=self.accounts,
@@ -95,6 +97,7 @@ class World:
             intent=IntentStep(lambda tier, c, m: get_model(tier, component=c, max_tokens=m)),
             get_model=get_model,
             budgets=self.budgets,
+            approvals=self.approvals,
         )
 
         @asynccontextmanager
@@ -323,14 +326,14 @@ def test_agent_turn_has_real_tool_access_to_the_student_records():
     world = World(
         intent(study_plan=0.9),
         task("study_planner"),
-        call("schedule_review", topic="bfs", quality=5),
+        call("propose_study_plan", title="Week 1", items=[{"topic": "bfs"}]),
         say("report"),
         say("final"),
     )
     with world.client() as client:
         stream(client, start(client)["run_id"])
 
-    assert (ALICE, "bfs") in world.study.reviews
+    assert [owner for owner, _ in world.study.plans.values()] == [ALICE]
 
 
 # -- routes with no agent ---------------------------------------------------

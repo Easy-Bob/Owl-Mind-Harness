@@ -26,6 +26,7 @@ from owl_mind.forum.handoff import HandoffService
 from owl_mind.forum.store import PostgresHandoffStore
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
 from owl_mind.services.admin_store import PostgresAdminStore
+from owl_mind.services.approvals import PostgresApprovalStore
 from owl_mind.services.models import sqlalchemy_url
 from owl_mind.services.run_events import RunEventLog
 from owl_mind.services.run_store import PostgresRunStore
@@ -131,6 +132,7 @@ async def _services():
                 intent=IntentStep(lambda tier, c, m: get_model(tier, component=c, max_tokens=m)),
                 get_model=get_model,
                 budgets=RedisBudgetLedger(client),
+                approvals=PostgresApprovalStore(sessions),
                 handoffs=HandoffService(
                     PostgresHandoffStore(sessions), LocalForum(), "Q&A", events=RunEventLog(runs)
                 ),

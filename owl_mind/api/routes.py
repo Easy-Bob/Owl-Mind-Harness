@@ -16,7 +16,7 @@ from owl_mind.api.schemas import HistoryMessage, MessageIn, RunStarted, ThreadOu
 from owl_mind.core.events import TERMINAL_KINDS
 from owl_mind.core.runtime import RunRequest, Services, execute_run, read_history
 from owl_mind.core.telemetry import record_activity
-from owl_mind.services.run_store import FINISHED, ActiveRunExists
+from owl_mind.services.run_store import FINISHED, WAITING, ActiveRunExists
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,7 @@ async def _event_stream(
             continue
         run = await services.runs.get_run(student, run_id)
         # The live stream can expire or be lost, so a finished run must still end the response.
-        if run is None or run.status in FINISHED:
+        if run is None or run.status in (*FINISHED, WAITING):
             status = run.status if run else "failed"
             yield _sse("0-0", "done", {"status": status})
             return
@@ -152,3 +152,76 @@ async def stream_run(
         _event_stream(services, student, run_id, last_event_id or "0"),
         media_type="text/event-stream",
     )
+
+
+# -- approvals ----------------------------------------------------------------
+
+
+def _approval_out(approval) -> dict:
+    return {
+        "id": str(approval.id),
+        "run_id": str(approval.run_id),
+        "kind": approval.kind,
+        "summary": approval.summary,
+        "items": approval.items,
+        "expires_at": approval.expires_at.isoformat(),
+    }
+
+
+@router.get("/threads/{thread_id}/approval")
+async def pending_approval(thread_id: uuid.UUID, student: Student, services: ServicesDep) -> dict:
+    """The chat's card waiting for an answer, so it shows again after a reload."""
+    found = None
+    if services.approvals is not None and await services.runs.get_thread(student, thread_id):
+        found = await services.approvals.pending_for_thread(student, thread_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Nothing waiting for approval")
+    return _approval_out(found)
+
+
+async def _decide(
+    run_id: uuid.UUID, approved: bool, http: Request, student: uuid.UUID, services: Services
+) -> RunStarted:
+    found = None
+    if services.approvals is not None:
+        found = await services.approvals.pending_for_run(student, run_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Nothing waiting for approval")
+    step = "approved" if approved else "rejected"
+    # Claimed once, so a double click can't apply the change twice.
+    if not await services.approvals.decide(found.id, step):
+        raise HTTPException(status_code=409, detail="This has already been answered.")
+    await services.runs.record_event(
+        run_id, f"approval:{step}", "approval", {"step": step, "kind": found.kind}
+    )
+    await services.runs.set_run_status(run_id, "completed")
+    # A new run continues the paused turn from its checkpoint, with the student's answer.
+    resume_run = await services.runs.create_run(found.thread_id)
+    await services.approvals.set_resume_run(found.id, resume_run)
+    _start(
+        http,
+        services,
+        RunRequest(
+            resume_run,
+            found.thread_id,
+            student,
+            "",
+            resume={"approved": approved},
+            setup=found.setup,
+        ),
+    )
+    return RunStarted(thread_id=found.thread_id, run_id=resume_run)
+
+
+@router.post("/runs/{run_id}/approve")
+async def approve(
+    run_id: uuid.UUID, http: Request, student: Student, services: ServicesDep
+) -> RunStarted:
+    return await _decide(run_id, True, http, student, services)
+
+
+@router.post("/runs/{run_id}/reject")
+async def reject(
+    run_id: uuid.UUID, http: Request, student: Student, services: ServicesDep
+) -> RunStarted:
+    return await _decide(run_id, False, http, student, services)

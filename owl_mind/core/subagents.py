@@ -8,7 +8,13 @@ from owl_mind.core import prompts
 from owl_mind.core.intent.taxonomy import Subagent
 from owl_mind.tools.concept import get_prerequisites
 from owl_mind.tools.materials import materials_search
-from owl_mind.tools.planner import get_due_topics, propose_study_plan, schedule_review
+from owl_mind.tools.planner import (
+    commit_study_plan,
+    get_due_topics,
+    preview_review_dates,
+    propose_study_plan,
+    reset_progress,
+)
 from owl_mind.tools.practice import analyze_complexity, build_hint
 from owl_mind.tools.quiz import generate_quiz_spec, grade_answer, pin_rubric
 
@@ -25,7 +31,13 @@ class TutorSpec:
 TOOL_SCOPES: dict[Subagent, tuple[str, ...]] = {
     Subagent.CONCEPT_TUTOR: ("materials_search", "get_prerequisites"),
     Subagent.PRACTICE_COACH: ("materials_search", "build_hint", "analyze_complexity"),
-    Subagent.STUDY_PLANNER: ("schedule_review", "get_due_topics", "propose_study_plan"),
+    Subagent.STUDY_PLANNER: (
+        "preview_review_dates",
+        "get_due_topics",
+        "propose_study_plan",
+        "commit_study_plan",
+        "reset_progress",
+    ),
     Subagent.QUIZ_MASTER: ("materials_search", "generate_quiz_spec", "pin_rubric", "grade_answer"),
 }
 
@@ -45,7 +57,13 @@ TUTORS: dict[Subagent, TutorSpec] = {
     Subagent.STUDY_PLANNER: TutorSpec(
         "Builds study plans and schedules reviews.",
         prompts.STUDY_PLANNER,
-        (schedule_review, get_due_topics, propose_study_plan),
+        (
+            preview_review_dates,
+            get_due_topics,
+            propose_study_plan,
+            commit_study_plan,
+            reset_progress,
+        ),
         800,
     ),
     Subagent.QUIZ_MASTER: TutorSpec(

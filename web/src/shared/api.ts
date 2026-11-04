@@ -35,6 +35,14 @@ export type Handoff = {
   // AI rewrites left for this draft. 0 hides the button.
   improve_left?: number;
 };
+export type Approval = {
+  id: string;
+  run_id: string;
+  kind: "commit_plan" | "reset_progress";
+  summary: string;
+  items: { topic: string; review_date: string }[];
+  expires_at: string;
+};
 export type Rewrite = {
   title: string;
   body: string;
@@ -114,6 +122,9 @@ export const api = {
     request<Rewrite>(`/handoffs/${id}/improve`, { title, body }),
   unreadReplies: () => request<Record<string, number>>("/handoffs/unread"),
   markRepliesSeen: (id: string) => request<void>(`/handoffs/${id}/seen`, {}),
+  approval: (threadId: string) => request<Approval>(`/threads/${threadId}/approval`),
+  approveRun: (runId: string) => request<RunStarted>(`/runs/${runId}/approve`, {}),
+  rejectRun: (runId: string) => request<RunStarted>(`/runs/${runId}/reject`, {}),
   forumAccount: () => request<ForumAccount>("/forum/account"),
   disconnectForum: () => request<void>("/forum/account/disconnect", {}),
 };

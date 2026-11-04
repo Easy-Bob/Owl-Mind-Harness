@@ -133,7 +133,67 @@ def test_one_grade_per_attempt(run):
         other = await store.record_grade(alice, rubric, "hash-2", {"score": 3})
         return first, again, other
 
-    assert run(body) == ({"score": 1}, {"score": 1}, {"score": 3})
+    assert run(body) == (({"score": 1}, True), ({"score": 1}, False), ({"score": 3}, True))
+
+
+def test_a_rubric_knows_its_quizs_topic(run):
+    alice = new_student()
+
+    async def body(store):
+        spec = await store.save_spec(alice, {"topic": "bfs"})
+        rubric = await store.pin_rubric(alice, spec, "Q?", POINTS, "fp")
+        return (await store.get_rubric(alice, rubric)).topic
+
+    assert run(body) == "bfs"
+
+
+ITEMS = [
+    {"topic": "bfs", "note": "", "review_date": "2026-11-09"},
+    {"topic": "heaps", "note": "", "review_date": "2026-11-03"},
+]
+
+
+def test_committing_a_plan_adds_only_its_new_topics_once(run):
+    alice, bob = new_student(), new_student()
+    kept = ReviewState(2.5, 6, 2, date(2026, 11, 20))
+
+    async def body(store):
+        await store.save_review(alice, "bfs", kept)
+        plan = await store.save_plan(alice, "Week 1", ITEMS)
+        stranger = await store.commit_plan(bob, plan)
+        first = await store.commit_plan(alice, plan)
+        again = await store.commit_plan(alice, plan)
+        return (
+            stranger,
+            first,
+            again,
+            (await store.get_plan(alice, plan)).status,
+            await store.get_review(alice, "bfs"),
+            await store.get_review(alice, "heaps"),
+            await store.get_plan(bob, plan),
+        )
+
+    stranger, first, again, status, bfs, heaps, hidden = run(body)
+    assert (stranger, first, again, status) == (False, True, False, "committed")
+    assert bfs == kept
+    assert heaps.due_date == date(2026, 11, 3)
+    assert hidden is None
+
+
+def test_resetting_progress_clears_one_topic_or_all_for_one_student(run):
+    alice, bob = new_student(), new_student()
+    state = ReviewState(2.5, 1, 1, date(2026, 11, 5))
+
+    async def body(store):
+        for student in (alice, bob):
+            for topic in ("bfs", "heaps", "tries"):
+                await store.save_review(student, topic, state)
+        one = await store.reset_progress(alice, "heaps")
+        left = await store.review_counts(alice, date(2026, 11, 1))
+        everything = await store.reset_progress(alice, None)
+        return one, left, everything, await store.review_counts(bob, date(2026, 11, 1))
+
+    assert run(body) == (1, (2, 0), 2, (3, 0))
 
 
 def test_plan_is_saved_as_proposed():

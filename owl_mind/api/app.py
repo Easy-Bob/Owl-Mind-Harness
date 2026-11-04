@@ -39,6 +39,7 @@ from owl_mind.materials.search import MaterialsSearch, RedisSearchCache
 from owl_mind.materials.store import PostgresMaterialsStore
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
 from owl_mind.services.admin_store import PostgresAdminStore
+from owl_mind.services.approvals import PostgresApprovalStore
 from owl_mind.services.models import sqlalchemy_url
 from owl_mind.services.run_events import RunEventLog
 from owl_mind.services.run_store import PostgresRunStore
@@ -47,6 +48,7 @@ from owl_mind.services.study_store import PostgresStudyStore
 # Longer than the stream's idle wait, so that waiting isn't mistaken for a lost connection.
 _REDIS_TIMEOUT_SECONDS = 15
 _HANDOFF_RETRY_SECONDS = 60
+_APPROVAL_CHECK_SECONDS = 300
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +74,26 @@ def _forum_accounts(settings, sessions) -> ForumAccounts | None:
         settings.forum_client_id, secret.get_secret_value(), settings.forum_oauth_redirect_url
     )
     return ForumAccounts(PostgresForumAccountStore(sessions), oauth, cipher)
+
+
+async def expire_approvals(services: Services) -> int:
+    """Expired approvals count as rejected: their runs stop and free the student's slot."""
+    runs = await services.approvals.expire_due()
+    for run_id in runs:
+        await services.runs.record_event(
+            run_id, "approval:expired", "approval", {"step": "expired"}
+        )
+        await services.runs.set_run_status(run_id, "stopped")
+    return len(runs)
+
+
+async def _approval_jobs(services: Services) -> None:
+    while True:
+        await asyncio.sleep(_APPROVAL_CHECK_SECONDS)
+        try:
+            await expire_approvals(services)
+        except Exception as exc:
+            logger.warning("Approval job failed: %s", type(exc).__name__)
 
 
 async def _forum_jobs(services: Services) -> None:
@@ -130,6 +152,7 @@ async def _production_services() -> AsyncIterator[Services]:
                 handoffs=handoffs,
                 forum_accounts=forum_accounts,
                 budgets=RedisBudgetLedger(client),
+                approvals=PostgresApprovalStore(sessions),
                 # Only with a model key: without one, the button is hidden.
                 improver=Improver(handoffs.store, get_chat_model, events)
                 if settings.deepseek_api_key
@@ -157,12 +180,18 @@ def create_app(services_factory: Callable = _production_services) -> FastAPI:
                 # The file is only held in memory, so an interrupted import can't resume.
                 await services.ingestor.store.fail_unfinished_jobs()
             retrying = None
+            expiring = (
+                asyncio.create_task(_approval_jobs(services))
+                if services.approvals is not None
+                else None
+            )
             if services.handoffs is not None:
                 await services.handoffs.store.fail_unfinished()
                 retrying = asyncio.create_task(_forum_jobs(services))
             yield
-            if retrying is not None:
-                retrying.cancel()
+            for job in (retrying, expiring):
+                if job is not None:
+                    job.cancel()
             for task in list(app.state.run_tasks):
                 task.cancel()
             await asyncio.gather(*app.state.run_tasks, return_exceptions=True)

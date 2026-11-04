@@ -322,6 +322,86 @@ describe("App", () => {
     expect(screen.queryByText(/Asking/)).toBeNull();
   });
 
+  const card = {
+    id: "a1",
+    run_id: "r1",
+    kind: "commit_plan",
+    summary: "Commit 'Midterm plan', 2 items. 1 new topics join your reviews.",
+    items: [
+      { topic: "bfs", review_date: "2026-11-09" },
+      { topic: "heaps", review_date: "2026-11-03" },
+    ],
+    expires_at: "2026-11-04T00:00:00Z",
+  };
+
+  it("shows the approval card when a run waits, and resumes on approve", async () => {
+    let answered = false;
+    const calls = fakeServer({
+      ...loggedIn,
+      "POST /threads": started,
+      "GET /threads/t1/approval": () => (answered ? { status: 404 } : { body: card }),
+      "POST /runs/r1/approve": () => {
+        answered = true;
+        return { body: { thread_id: "t1", run_id: "r2" } };
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("Your message"), "save my plan{Enter}");
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    lastStream().emit("done", { status: "waiting_approval" });
+
+    const region = await screen.findByRole("region", { name: "Approval needed" });
+    expect(region).toHaveTextContent(card.summary);
+    expect(region).toHaveTextContent("heaps, review on 2026-11-03");
+    expect(screen.getByLabelText("Your message")).toBeDisabled();
+    expect(screen.getByText("Answer the card above first.")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
+    expect(lastStream().url).toBe("/runs/r2/stream");
+    expect(screen.queryByRole("region", { name: "Approval needed" })).toBeNull();
+    lastStream().emit("text_delta", { text: "Your plan is saved." });
+    lastStream().emit("done", { status: "completed" });
+    expect(await screen.findByText("Your plan is saved.")).toBeVisible();
+    expect(calls.filter((c) => c.key === "POST /runs/r1/approve")).toHaveLength(1);
+  });
+
+  it("rejects through the card", async () => {
+    const calls = fakeServer({
+      ...loggedIn,
+      "POST /threads": started,
+      "GET /threads/t1/approval": { body: card },
+      "POST /runs/r1/reject": { body: { thread_id: "t1", run_id: "r2" } },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("Your message"), "reset{Enter}");
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    lastStream().emit("done", { status: "waiting_approval" });
+    await user.click(await screen.findByRole("button", { name: "Reject" }));
+
+    await waitFor(() => expect(calls.some((c) => c.key === "POST /runs/r1/reject")).toBe(true));
+  });
+
+  it("shows a waiting card again when the chat is opened", async () => {
+    fakeServer({
+      ...loggedIn,
+      "GET /threads": { body: [{ id: "t1", title: "Plan", created_at: "2026-11-03T00:00:00Z" }] },
+      "GET /threads/t1/messages": { body: [{ role: "user", content: "save my plan" }] },
+      "GET /threads/t1/approval": { body: card },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Plan" }));
+
+    expect(await screen.findByRole("region", { name: "Approval needed" })).toBeVisible();
+  });
+
   it("shows a failed run's error in the conversation and keeps its partial text", async () => {
     fakeServer({ ...loggedIn, "POST /threads": started });
     const user = userEvent.setup();

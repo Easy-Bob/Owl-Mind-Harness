@@ -32,6 +32,7 @@ from owl_mind.core.persistence import open_persistence
 from owl_mind.core.runtime import Services
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
 from owl_mind.services.admin_store import PostgresAdminStore
+from owl_mind.services.approvals import PostgresApprovalStore
 from owl_mind.services.models import sqlalchemy_url
 from owl_mind.services.run_store import ActiveRunExists, InMemoryRunStore, PostgresRunStore
 from owl_mind.services.study_store import PostgresStudyStore
@@ -331,6 +332,7 @@ class RealWorld:
                     ),
                     get_model=get_model,
                     budgets=RedisBudgetLedger(client),
+                    approvals=PostgresApprovalStore(sessions),
                 )
             await client.aclose()
             await engine.dispose()
@@ -376,6 +378,85 @@ def test_full_turn_on_real_services_survives_a_restart():
     assert status == ("completed",)
     assert ("subagent_start",) in recorded
     assert ("text_delta",) not in recorded
+
+
+def test_a_paused_run_survives_a_restart_and_resumes_from_its_checkpoint():
+    student = new_student()
+    plan_id = uuid.uuid4()
+    items = [{"topic": "tries", "note": "", "review_date": "2026-11-04"}]
+    with psycopg.connect(get_settings().database_url) as connection:
+        connection.execute(
+            "INSERT INTO app.study_plans (id, student_id, title, items, status)"
+            " VALUES (%s, %s, 'Week 1', %s, 'proposed')",
+            (plan_id, student, json.dumps(items)),
+        )
+    world = RealWorld(
+        student,
+        intent(study_plan=0.9),
+        task("study_planner"),
+        call("commit_study_plan", plan_id=str(plan_id)),
+    )
+    with TestClient(world.app) as client:
+        started = client.post("/threads", json={"message": "save my plan"}).json()
+        paused = parse_sse(client.get(f"/runs/{started['run_id']}/stream").text)
+
+    assert paused[-1] == ("done", {"status": "waiting_approval"})
+
+    # A new app, as after a restart. The waiting run isn't failed, and the card is still there.
+    with TestClient(RealWorld(student, say("committed"), say("Saved.")).app) as client:
+        card = client.get(f"/threads/{started['thread_id']}/approval")
+        resumed = client.post(f"/runs/{started['run_id']}/approve").json()
+        events = parse_sse(client.get(f"/runs/{resumed['run_id']}/stream").text)
+        again = client.post(f"/runs/{started['run_id']}/approve")
+
+    assert card.status_code == 200
+    assert text_of(events) == "Saved."
+    assert again.status_code == 404
+    with psycopg.connect(get_settings().database_url) as connection:
+        plan = connection.execute(
+            "SELECT status FROM app.study_plans WHERE id = %s", (plan_id,)
+        ).fetchone()
+        review = connection.execute(
+            "SELECT due_date FROM app.review_schedule WHERE student_id = %s AND topic = 'tries'",
+            (student,),
+        ).fetchone()
+        approval = connection.execute(
+            "SELECT status, resume_run_id FROM app.approvals WHERE run_id = %s",
+            (started["run_id"],),
+        ).fetchone()
+    assert plan == ("committed",)
+    assert review[0].isoformat() == "2026-11-04"
+    assert approval == ("approved", uuid.UUID(resumed["run_id"]))
+
+
+def test_one_pending_approval_per_student_and_a_decision_is_claimed_once():
+    student = new_student()
+
+    async def body():
+        engine = create_async_engine(sqlalchemy_url(get_settings().database_url))
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        runs, approvals = PostgresRunStore(sessions), PostgresApprovalStore(sessions)
+        thread = await runs.create_thread(student, "t")
+        run_id = await runs.create_run(thread.id)
+        asked = {"kind": "reset_progress", "summary": "Reset progress for 'bfs'.", "items": []}
+        try:
+            approval = await approvals.create(run_id, student, thread.id, asked, {})
+            second = None
+            try:
+                await approvals.create(run_id, student, thread.id, asked, {})
+            except Exception as exc:  # The partial unique index refuses a second pending one.
+                second = type(exc).__name__
+            claims = await asyncio.gather(
+                approvals.decide(approval.id, "approved"), approvals.decide(approval.id, "rejected")
+            )
+            return second, sorted(claims), await approvals.pending_for_run(student, run_id)
+        finally:
+            await engine.dispose()
+
+    second, claims, pending = in_loop(body)
+    assert second == "IntegrityError"
+    assert claims == [False, True]
+    assert pending is None
 
 
 def test_reconnect_resumes_from_a_real_redis_event_id():

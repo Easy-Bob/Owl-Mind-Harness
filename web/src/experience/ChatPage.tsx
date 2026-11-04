@@ -3,12 +3,14 @@ import {
   api,
   ApiError,
   MAX_MESSAGE_CHARS,
+  type Approval,
   type Handoff,
   type HistoryMessage,
   type SimilarPost,
   type Thread,
   type User,
 } from "../shared/api";
+import { ApprovalCard } from "./ApprovalCard";
 import { ForumAccountControl } from "./ForumAccountControl";
 import { HandoffCard } from "./HandoffCard";
 
@@ -29,6 +31,7 @@ export function ChatPage({ user, onLoggedOut }: Props) {
   const [draft, setDraft] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [handoffs, setHandoffs] = useState<Handoff[]>([]);
+  const [approval, setApproval] = useState<Approval | null>(null);
   const [unread, setUnread] = useState<Record<string, number>>({});
   // Similar posts arrive only with the live event, so they're kept per draft here.
   const [similar, setSimilar] = useState<Record<string, SimilarPost[]>>({});
@@ -83,6 +86,14 @@ export function ChatPage({ user, onLoggedOut }: Props) {
       .catch(() => setHandoffs([]));
   }, []);
 
+  // Most chats have nothing waiting, which the server answers with a 404.
+  const loadApproval = useCallback((threadId: string) => {
+    api
+      .approval(threadId)
+      .then(setApproval)
+      .catch(() => setApproval(null));
+  }, []);
+
   // Forum replies are optional on the server, so failing to count them is not an error to show.
   const loadUnread = useCallback(() => {
     api
@@ -133,6 +144,9 @@ export function ChatPage({ user, onLoggedOut }: Props) {
         if (drafted) {
           loadHandoffs(threadId);
         }
+        if (update.status === "waiting_approval") {
+          loadApproval(threadId);
+        }
       }
     });
   }
@@ -173,7 +187,9 @@ export function ChatPage({ user, onLoggedOut }: Props) {
     setSelected(threadId);
     setMessages([]);
     setHandoffs([]);
+    setApproval(null);
     loadHandoffs(threadId);
+    loadApproval(threadId);
     try {
       setMessages(await api.history(threadId));
     } catch (caught) {
@@ -190,6 +206,7 @@ export function ChatPage({ user, onLoggedOut }: Props) {
     setSelected(null);
     setMessages([]);
     setHandoffs([]);
+    setApproval(null);
     setDraft("");
   }
 
@@ -262,6 +279,23 @@ export function ChatPage({ user, onLoggedOut }: Props) {
               }
             />
           ))}
+          {approval && selected && (
+            <ApprovalCard
+              approval={approval}
+              onAnswer={async (approved) => {
+                try {
+                  const decide = approved ? api.approveRun : api.rejectRun;
+                  const resumed = await decide(approval.run_id);
+                  setApproval(null);
+                  follow(resumed.run_id, selected);
+                } catch (caught) {
+                  // Answered elsewhere, or expired: show whatever is current.
+                  loadApproval(selected);
+                  handleFailure(caught);
+                }
+              }}
+            />
+          )}
           {answer && <Message role="assistant" content={answer} />}
           {running && <p className="progress">{progress}...</p>}
           {error && (
@@ -283,7 +317,7 @@ export function ChatPage({ user, onLoggedOut }: Props) {
             value={draft}
             maxLength={MAX_MESSAGE_CHARS}
             rows={3}
-            disabled={running}
+            disabled={running || approval !== null}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
@@ -296,7 +330,8 @@ export function ChatPage({ user, onLoggedOut }: Props) {
             <span>
               {draft.length} / {MAX_MESSAGE_CHARS}
             </span>
-            <button type="submit" disabled={running || !draft.trim()}>
+            {approval && <span>Answer the card above first.</span>}
+            <button type="submit" disabled={running || approval !== null || !draft.trim()}>
               Send
             </button>
           </div>

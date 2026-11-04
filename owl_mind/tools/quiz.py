@@ -6,6 +6,7 @@ What stays non-deterministic is the model's judgment of each point, and the resu
 
 import hashlib
 import uuid
+from datetime import date
 from typing import Any
 
 from langchain.tools import ToolRuntime
@@ -13,6 +14,8 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from owl_mind.services.quiz_math import _MIX, MAX_QUESTIONS, allocate, fingerprint, grade
+from owl_mind.services.sm2 import DEFAULT_EASE, sm2
+from owl_mind.services.study_store import ReviewState
 from owl_mind.tools.context import RunContext
 
 MAX_RUBRIC_POINTS = 10
@@ -87,6 +90,31 @@ async def grade_answer(
     if fingerprint(rubric.points) != rubric.fingerprint:
         return {"error": "This rubric changed after it was pinned, so it can't be graded."}
     answer_hash = hashlib.sha256(answer.encode("utf-8")).hexdigest()
-    return await context.store.record_grade(
+    result, new = await context.store.record_grade(
         context.student_id, rubric.id, answer_hash, grade(rubric.points, checks)
     )
+    if new and rubric.topic:
+        # Recall comes only from a real, graded answer, so no model picks a quality.
+        await record_recall(context, rubric.topic, result)
+    return result
+
+
+async def record_recall(context: RunContext, topic: str, result: dict[str, Any]) -> None:
+    """Move the topic's next review by how well the student did: 0 for nothing right, 5 for all."""
+    quality = round(5 * float(result.get("percentage") or 0) / 100)
+    topic = topic.strip().lower()
+    current = await context.store.get_review(context.student_id, topic)
+    step = sm2(
+        quality=quality,
+        ease=current.ease if current else DEFAULT_EASE,
+        interval=current.interval_days if current else 0,
+        repetitions=current.repetitions if current else 0,
+        today=context.today,
+    )
+    state = ReviewState(
+        ease=step["ease"],
+        interval_days=step["interval"],
+        repetitions=step["repetitions"],
+        due_date=date.fromisoformat(step["due_date"]),
+    )
+    await context.store.save_review(context.student_id, topic, state)

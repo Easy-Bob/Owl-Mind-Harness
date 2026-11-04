@@ -1,14 +1,17 @@
-"""schedule_review, get_due_topics and propose_study_plan. Dates always come from code."""
+"""The planner's tools. Dates always come from code, and changes wait for the student's approval.
 
-from datetime import date
+commit_study_plan and reset_progress pause the run with an interrupt. The card the student sees
+is written here, from the student's own records, never by the model.
+"""
+
+import uuid
 from typing import Any
 
 from langchain.tools import ToolRuntime
 from langchain_core.tools import tool
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
-from owl_mind.services.sm2 import DEFAULT_EASE, sm2
-from owl_mind.services.study_store import ReviewState
 from owl_mind.tools.context import RunContext
 
 MAX_PLAN_ITEMS = 30
@@ -24,29 +27,17 @@ def _normalize(topic: str) -> str:
 
 
 @tool
-async def schedule_review(
-    topic: str, quality: int, runtime: ToolRuntime[RunContext]
+async def preview_review_dates(
+    topics: list[str], runtime: ToolRuntime[RunContext]
 ) -> dict[str, Any]:
-    """Record how well the student recalled a topic and get its next review date. quality is 0
-    (blank), 3 (correct with effort) or up to 5 (perfect). Never work out a date yourself."""
+    """Get each topic's next review date: its current due date, or today for a new topic. Saves
+    nothing. Never work out a date yourself."""
     context = runtime.context
-    topic = _normalize(topic)
-    current = await context.store.get_review(context.student_id, topic)
-    result = sm2(
-        quality=max(0, min(5, quality)),
-        ease=current.ease if current else DEFAULT_EASE,
-        interval=current.interval_days if current else 0,
-        repetitions=current.repetitions if current else 0,
-        today=context.today,
-    )
-    state = ReviewState(
-        ease=result["ease"],
-        interval_days=result["interval"],
-        repetitions=result["repetitions"],
-        due_date=date.fromisoformat(result["due_date"]),
-    )
-    await context.store.save_review(context.student_id, topic, state)
-    return {"topic": topic, **result}
+    dates = {}
+    for topic in topics[:MAX_PLAN_ITEMS]:
+        state = await context.store.get_review(context.student_id, _normalize(topic))
+        dates[_normalize(topic)] = (state.due_date if state else context.today).isoformat()
+    return {"today": context.today.isoformat(), "dates": dates}
 
 
 @tool
@@ -74,3 +65,65 @@ async def propose_study_plan(
         planned.append({"topic": topic, "note": item.note, "review_date": due.isoformat()})
     plan_id = await context.store.save_plan(context.student_id, title, planned)
     return {"plan_id": str(plan_id), "status": "proposed", "items": planned}
+
+
+def _approved(kind: str, summary: str, target: str, items: list | None = None) -> bool:
+    """Pause the run until the student answers the card. Resuming returns their decision."""
+    decision = interrupt({"kind": kind, "summary": summary, "target": target, "items": items or []})
+    return isinstance(decision, dict) and decision.get("approved") is True
+
+
+@tool
+async def commit_study_plan(plan_id: str, runtime: ToolRuntime[RunContext]) -> dict[str, Any]:
+    """Commit a proposed plan, after the student approves it on a card. New topics in it join
+    their review schedule. Use only when the student wants to keep the plan."""
+    context = runtime.context
+    parsed = _uuid(plan_id)
+    plan = await context.store.get_plan(context.student_id, parsed) if parsed else None
+    if plan is None or plan.status != "proposed":
+        return {"error": "Unknown plan_id, or the plan isn't a proposal."}
+    new = [
+        item["topic"]
+        for item in plan.items
+        if await context.store.get_review(context.student_id, item["topic"]) is None
+    ]
+    summary = (
+        f"Commit '{plan.title}', {len(plan.items)} items. {len(new)} new topics join your reviews."
+    )
+    # The card lists the saved proposal itself, so the student approves exactly what is kept.
+    items = [{"topic": i["topic"], "review_date": i["review_date"]} for i in plan.items]
+    if not _approved("commit_plan", summary, str(plan.id), items):
+        return {"status": "not committed", "reason": "The student said no. Nothing changed."}
+    if not await context.store.commit_plan(context.student_id, plan.id):
+        return {"error": "The plan was already committed."}
+    return {"status": "committed", "plan_id": str(plan.id), "new_topics": new}
+
+
+@tool
+async def reset_progress(
+    runtime: ToolRuntime[RunContext], topic: str = "", all_topics: bool = False
+) -> dict[str, Any]:
+    """Clear the student's review progress for one topic, or for all topics with all_topics,
+    after they approve it on a card. Use only when the student asks to start over."""
+    context = runtime.context
+    if all_topics:
+        scheduled, _ = await context.store.review_counts(context.student_id, context.today)
+        if not scheduled:
+            return {"error": "There's no progress to reset."}
+        summary, target = f"Reset progress for all {scheduled} topics.", "all"
+    else:
+        target = _normalize(topic)
+        if not target or await context.store.get_review(context.student_id, target) is None:
+            return {"error": "That topic has no progress to reset."}
+        summary = f"Reset progress for '{target}'."
+    if not _approved("reset_progress", summary, target):
+        return {"status": "not reset", "reason": "The student said no. Nothing changed."}
+    cleared = await context.store.reset_progress(context.student_id, None if all_topics else target)
+    return {"status": "reset", "topics": cleared}
+
+
+def _uuid(value: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return None
