@@ -120,3 +120,20 @@ def test_rule_allows_legal_code(tmp_path, check, relative, source):
     write(tmp_path, relative, source)
 
     assert check(tmp_path) == []
+
+
+def test_the_web_dev_server_forwards_every_api_route():
+    """A route the dev server doesn't forward gets the web page back instead of data."""
+    import re
+    from pathlib import Path
+
+    from owl_mind.api.app import create_app
+
+    config = (Path(__file__).resolve().parents[1] / "web" / "vite.config.ts").read_text()
+    forwarded = set(re.findall(r'"(/[a-z-]+)"', config))
+    # The schema lists every route, including those of included routers.
+    paths = create_app().openapi()["paths"]
+    # /metrics is read by Prometheus from the API directly, never by the browser.
+    routes = {"/" + path.split("/")[1] for path in paths} - {"/metrics"}
+
+    assert routes - forwarded == set()

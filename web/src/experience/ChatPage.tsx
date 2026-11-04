@@ -13,6 +13,7 @@ import {
 import { ApprovalCard } from "./ApprovalCard";
 import { ForumAccountControl } from "./ForumAccountControl";
 import { HandoffCard } from "./HandoffCard";
+import { HelpPanel } from "./HelpPanel";
 
 const UNREAD_CHECK_MS = 60_000;
 import { Message } from "./Message";
@@ -260,9 +261,7 @@ export function ChatPage({ user, onLoggedOut }: Props) {
 
       <main className="conversation">
         <div className="messages" role="log" aria-live="polite" ref={log}>
-          {messages.length === 0 && !running && (
-            <p className="empty">Ask a question to start studying.</p>
-          )}
+          {messages.length === 0 && !running && <HelpPanel />}
           {messages.map((message, index) => (
             <Message key={index} role={message.role} content={message.content} />
           ))}
@@ -296,7 +295,7 @@ export function ChatPage({ user, onLoggedOut }: Props) {
               }}
             />
           )}
-          {answer && <Message role="assistant" content={answer} />}
+          {answer && <Message role="assistant" content={answer} final={false} />}
           {running && <p className="progress">{progress}...</p>}
           {error && (
             <p className="error" role="alert">

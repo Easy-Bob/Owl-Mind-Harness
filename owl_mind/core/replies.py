@@ -2,13 +2,39 @@
 
 from owl_mind.core.intent.taxonomy import Intent, Reply
 
+# What a student can ask, shown in the empty chat too. Fixed text, so it costs no model call.
+CAN_HELP_WITH: tuple[tuple[str, str], ...] = (
+    ("Explain a concept", "how does a hash table handle collisions?"),
+    ("Get unstuck on a problem, with hints", "I can't start this graph problem"),
+    ("Check your code's runtime", "what is the runtime of this loop?"),
+    ("Quiz you", "give me a short quiz on sorting"),
+    ("Plan your revision", "plan two weeks for my algorithms final"),
+    ("Find material", "which lecture covers Bloom filters?"),
+    ("Reach a human tutor", "I want to talk to a TA"),
+)
+CANNOT = "I can't answer other subjects, and I won't write full solutions to graded work."
+
+
+def help_text(topics: list[str]) -> str:
+    """What the student can ask, with the topics of the course notes as they are now."""
+    lines = ["I can help you study computer science from your course notes:"]
+    lines += [f'- {what}: "{example}"' for what, example in CAN_HELP_WITH]
+    if topics:
+        lines.append("Topics in your course notes: " + ", ".join(topics) + ".")
+    lines.append(CANNOT)
+    return "\n".join(lines)
+
+
+# These replies end with help_text, so the student sees what they can ask.
+WITH_HELP = (Reply.OFF_TOPIC, Reply.CLARIFY)
+
 TEXT: dict[Reply, str] = {
     Reply.EMPTY: "It looks like that message was empty. What would you like to work on?",
     Reply.GREETING: "Hello! What would you like to study today?",
     Reply.THANKS: "You're welcome. What would you like to do next?",
-    Reply.OFF_TOPIC: "I can only help with studying computer science. What are you working on?",
+    Reply.OFF_TOPIC: "That isn't something I can help with.",
     Reply.FEEDBACK: "Thanks for telling me. What would you like to do next?",
-    Reply.CLARIFY: "I'm not sure what you need. Could you say a little more about it?",
+    Reply.CLARIFY: "I'm not sure what you need.",
 }
 HANDOFF_DRAFTED = (
     "I drafted a forum post for a tutor. Check it below, change anything you like, then approve it."

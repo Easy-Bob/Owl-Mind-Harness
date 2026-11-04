@@ -136,7 +136,10 @@ def build_owl_agent(
     # Only a two-tutor turn has work to plan. Elsewhere write_todos would just add tokens.
     is_composite = task_kind is TaskKind.COMPOSITE
     todos = [TodoListMiddleware()] if is_composite else []
-    joins = is_composite and get_settings().composite_answer == "join"
+    # A quiz turn always joins: the student sees the code-made quiz, not a rewrite of it.
+    joins = (is_composite and get_settings().composite_answer == "join") or (
+        task_kind is TaskKind.ASSESS
+    )
     join = [JoinAnswerMiddleware(tuple(s.value for s in subagents))] if joins else []
     # Checked turns are reviewed at the end. Elsewhere, a tutor's reply is checked on arrival.
     report_check = (

@@ -6,9 +6,7 @@ from datetime import date
 
 import pytest
 
-from owl_mind.services.quiz_math import allocate, fingerprint, grade
-from owl_mind.services.sm2 import sm2
-from owl_mind.services.study_store import InMemoryStudyStore, PinnedRubric, ReviewState
+from owl_mind.services.study_store import InMemoryStudyStore, ReviewState
 from owl_mind.tools.concept import _PREREQUISITES, chain_for
 from owl_mind.tools.context import RunContext
 from owl_mind.tools.planner import (
@@ -18,7 +16,7 @@ from owl_mind.tools.planner import (
     propose_study_plan,
 )
 from owl_mind.tools.practice import MAX_LEVEL, all_hints, analyze, build_hint
-from owl_mind.tools.quiz import RubricPoint, generate_quiz_spec, grade_answer, pin_rubric
+from owl_mind.tools.quiz import QuizQuestion, post_quiz
 
 TODAY = date(2026, 11, 2)
 ALICE = uuid.UUID(int=1)
@@ -135,37 +133,6 @@ def test_preview_has_no_argument_for_a_date_or_quality():
     assert set(preview_review_dates.args) == {"topics"}
 
 
-# -- recall from graded answers -----------------------------------------------
-
-
-@pytest.mark.parametrize(("checks", "quality"), [({"a": True, "b": True}, 5), ({}, 0)])
-def test_a_graded_answer_records_recall_from_its_own_mark(store, checks, quality):
-    rubric = pinned(store)
-
-    call(grade_answer, store, rubric_id=rubric["rubric_id"], answer="x", checks=checks)
-
-    expected = sm2(quality=quality, ease=2.5, interval=0, repetitions=0, today=TODAY)
-    saved = store.reviews[(ALICE, "bfs")]
-    assert (saved.due_date.isoformat(), saved.repetitions) == (
-        expected["due_date"],
-        expected["repetitions"],
-    )
-
-
-def test_the_same_answer_graded_again_records_recall_once(store):
-    rubric = pinned(store)
-    for _ in range(2):
-        call(
-            grade_answer,
-            store,
-            rubric_id=rubric["rubric_id"],
-            answer="x",
-            checks={"a": True, "b": True},
-        )
-
-    assert store.reviews[(ALICE, "bfs")].repetitions == 1
-
-
 # -- get_due_topics ---------------------------------------------------------
 
 
@@ -213,142 +180,103 @@ def test_empty_plan_is_refused(store):
     assert "error" in call(propose_study_plan, store, title="x", items=[])
 
 
-# -- quiz -------------------------------------------------------------------
+# -- post_quiz --------------------------------------------------------------
 
 
-@pytest.mark.parametrize("count", [1, 2, 5, 7, 20])
-@pytest.mark.parametrize("difficulty", ["easy", "mixed", "hard"])
-def test_allocation_always_sums_to_the_count(count, difficulty):
-    assert sum(allocate(count, difficulty).values()) == count
-
-
-@pytest.mark.parametrize(("asked", "given"), [(0, 1), (5, 5), (99, 20)])
-def test_quiz_size_is_limited(store, asked, given):
-    assert call(generate_quiz_spec, store, topic="bfs", count=asked)["count"] == given
-
-
-def test_unknown_difficulty_falls_back_to_mixed(store):
-    assert (
-        call(generate_quiz_spec, store, topic="bfs", difficulty="brutal")["difficulty"] == "mixed"
+def question(text="Which uses linked lists?", options=None, answer=("A",)) -> QuizQuestion:
+    return QuizQuestion(
+        text=text,
+        options=list(options or ["Chaining", "Linear probing", "Cuckoo hashing", "Rehashing"]),
+        answer=list(answer),
     )
 
 
-def points():
-    return [
-        RubricPoint(id="a", weight=2, description="Names the queue"),
-        RubricPoint(id="b", weight=3, description="Explains visited"),
-    ]
-
-
-def pinned(store, student=ALICE):
-    spec = call(generate_quiz_spec, store, student=student, topic="bfs")
-    return call(
-        pin_rubric, store, student=student, spec_id=spec["spec_id"], question="Q?", points=points()
+def post(store, *questions, topic="hash tables"):
+    context = RunContext(student_id=ALICE, store=store, today=TODAY)
+    runtime = FakeRuntime(context)
+    result = asyncio.run(
+        post_quiz.coroutine(topic=topic, questions=list(questions), runtime=runtime)
     )
+    return result, context.posted_quizzes
 
 
-def test_grade_is_summed_in_code_from_the_pinned_rubric(store):
-    rubric = pinned(store)
-
-    result = call(
-        grade_answer,
+def test_a_quiz_is_laid_out_by_code_with_the_answers_after_the_last_question(store):
+    result, [quiz] = post(
         store,
-        rubric_id=rubric["rubric_id"],
-        answer="x",
-        checks={"a": True, "b": False},
+        question(),
+        question("Which are open addressing?", answer=("C", "B")),
     )
 
-    assert (result["score"], result["max_score"], result["percentage"]) == (2.0, 5.0, 40.0)
-    assert result["rubric_fingerprint"] == rubric["fingerprint"]
-
-
-def test_grade_tool_has_no_argument_for_a_rubric_or_total():
-    assert set(grade_answer.args) == {"rubric_id", "answer", "checks"}
-
-
-def test_unjudged_point_is_reported_not_silently_failed(store):
-    rubric = pinned(store)
-
-    result = call(
-        grade_answer, store, rubric_id=rubric["rubric_id"], answer="x", checks={"a": True}
+    assert result == {"status": "posted", "questions": 2}
+    assert quiz == (
+        "**Quiz: hash tables**\n\n"
+        "1. Which uses linked lists?\n"
+        "   A. Chaining\n   B. Linear probing\n   C. Cuckoo hashing\n   D. Rehashing\n\n"
+        "2. Which are open addressing? (choose all that apply)\n"
+        "   A. Chaining\n   B. Linear probing\n   C. Cuckoo hashing\n   D. Rehashing\n\n"
+        "**Answers:** 1. A  2. BC"
     )
 
-    assert result["unchecked"] == ["b"]
+
+@pytest.mark.parametrize(
+    ("bad", "problem"),
+    [
+        (question(options=["a", "b", "c"]), "exactly 4 options"),
+        (question(options=["a", "b", "c", "d", "e"]), "exactly 4 options"),
+        (question(answer=("E",)), "isn't one of its options"),
+        (question(answer=()), "1 to 3 different answer letters"),
+        (question(answer=("A", "B", "C", "D")), "1 to 3 different answer letters"),
+        (question(answer=("A", "a")), "1 to 3 different answer letters"),
+        (question(options=["Same", "same", "Other", "Last"]), "the same option twice"),
+        (question(options=["", "B", "C", "D"]), "an empty option"),
+    ],
+)
+def test_a_malformed_quiz_is_refused_and_not_shown(store, bad, problem):
+    result, posted = post(store, question(), bad)
+
+    assert "Question 2" in result["error"] and problem in result["error"]
+    assert posted == []
 
 
-def test_rubric_changed_after_pinning_is_refused(store):
-    rubric = pinned(store)
-    rubric_id = uuid.UUID(rubric["rubric_id"])
-    owner, original = store.rubrics[rubric_id]
-    changed = [dict(original.points[0], weight=100), original.points[1]]
-    store.rubrics[rubric_id] = (
-        owner,
-        PinnedRubric(rubric_id, original.question, changed, original.fingerprint),
-    )
+def test_a_quiz_keeps_at_most_five_questions_without_a_retry(store):
+    assert "1 to 5" in post(store)[0]["error"]
+    result, [quiz] = post(store, *[question()] * 8)
 
-    result = call(
-        grade_answer, store, rubric_id=rubric["rubric_id"], answer="x", checks={"a": True}
-    )
-
-    assert "changed" in result["error"]
+    assert result == {
+        "status": "posted",
+        "questions": 5,
+        "note": "Only the first 5 questions were kept.",
+    }
+    assert "5. Which uses linked lists?" in quiz and "6." not in quiz
 
 
-def test_fingerprint_covers_descriptions():
-    base = [{"id": "a", "weight": 1, "description": "one"}]
-    changed = [{"id": "a", "weight": 1, "description": "two"}]
+def test_only_one_quiz_is_posted_per_turn(store):
+    context = RunContext(student_id=ALICE, store=store, today=TODAY)
+    runtime = FakeRuntime(context)
 
-    assert fingerprint(base) != fingerprint(changed)
+    async def twice():
+        first = await post_quiz.coroutine(topic="a", questions=[question()], runtime=runtime)
+        second = await post_quiz.coroutine(topic="b", questions=[question()], runtime=runtime)
+        return first, second
+
+    first, second = asyncio.run(twice())
+
+    assert first["status"] == "posted"
+    assert "already posted" in second["error"]
+    assert len(context.posted_quizzes) == 1
 
 
-def test_same_answer_graded_twice_keeps_the_first_grade(store):
-    rubric = pinned(store)
-    first = call(grade_answer, store, rubric_id=rubric["rubric_id"], answer="x", checks={"a": True})
-
-    second = call(
-        grade_answer,
+def test_the_models_own_choose_all_wording_is_replaced_by_one_marker(store):
+    _, [quiz] = post(
         store,
-        rubric_id=rubric["rubric_id"],
-        answer="x",
-        checks={"a": True, "b": True},
+        question("Which are open addressing? Choose all that apply.", answer=("B", "C")),
+        question("Which apply (select all)?", answer=("A", "B")),
     )
 
-    assert second == first
+    assert "1. Which are open addressing? (choose all that apply)" in quiz
+    assert "2. Which apply? (choose all that apply)" in quiz
+    assert quiz.lower().count("all that apply") == 2
 
 
-def test_one_student_cannot_use_anothers_spec_or_rubric(store):
-    rubric = pinned(store, student=ALICE)
-    spec = call(generate_quiz_spec, store, student=ALICE, topic="bfs")
-
-    assert "error" in call(
-        grade_answer, store, student=BOB, rubric_id=rubric["rubric_id"], answer="x", checks={}
-    )
-    assert "error" in call(
-        pin_rubric, store, student=BOB, spec_id=spec["spec_id"], question="Q?", points=points()
-    )
-
-
-@pytest.mark.parametrize("bad_id", ["not-a-uuid", str(uuid.uuid4())])
-def test_unknown_ids_give_a_clear_error(store, bad_id):
-    assert "error" in call(grade_answer, store, rubric_id=bad_id, answer="x", checks={})
-    assert "error" in call(pin_rubric, store, spec_id=bad_id, question="Q?", points=points())
-
-
-def test_duplicate_rubric_point_ids_are_refused(store):
-    spec = call(generate_quiz_spec, store, topic="bfs")
-    repeated = [points()[0], points()[0]]
-
-    assert "error" in call(
-        pin_rubric, store, spec_id=spec["spec_id"], question="Q?", points=repeated
-    )
-
-
-def test_grade_math_is_pure():
-    rubric = [{"id": "a", "weight": 1, "description": "d"}]
-
-    assert grade(rubric, {"a": True}) == grade(rubric, {"a": True})
-
-
-def test_review_state_is_stored_per_topic(store):
-    asyncio.run(store.save_review(ALICE, "x", ReviewState(2.5, 1, 1, TODAY)))
-
-    assert asyncio.run(store.get_review(ALICE, "y")) is None
+def test_the_quiz_tool_takes_no_rubric_or_grading_arguments():
+    assert set(post_quiz.args) == {"topic", "questions"}

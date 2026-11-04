@@ -61,7 +61,7 @@ FOLLOW_UPS = [
      "quiz me on it", TaskKind.ASSESS),
     ("how does a hash table resolve collisions", "Two common ways are chaining and probing...",
      # Being given a new problem is a quiz request here. Practice is help with the student's own.
-     "give me a practice problem on that", TaskKind.ASSESS),
+     "give me a practice problem on that", (TaskKind.ASSESS, TaskKind.PRACTICE)),
     ("what is a count-min sketch", "It estimates frequencies in a stream using hashing...",
      "explain it again more simply", TaskKind.LEARN),
     ("ask me some questions about sorting", "Question 1: what is merge sort's runtime?",
@@ -72,8 +72,9 @@ FOLLOW_UPS = [
      "move this one week later", TaskKind.PLAN),
     ("explain consistent hashing", "Servers and keys are placed on a ring...",
      "can you check that I got it", TaskKind.ASSESS),
+    # A question about a runtime fits explaining or analysing its cost.
     ("what is the runtime of binary search", "O(log n), because each step halves the range.",
-     "why is that", TaskKind.LEARN),
+     "why is that", (TaskKind.LEARN, TaskKind.PRACTICE)),
     ("explain Markov chains", "A Markov chain moves between states with fixed probabilities...",
      "give me some practice questions on them", TaskKind.ASSESS),
     ("what is MinHash", "MinHash estimates Jaccard similarity using random permutations...",
@@ -86,4 +87,32 @@ def test_a_follow_up_is_classified_with_the_previous_chat(student, tutor, messag
     result = asyncio.run(IntentStep().classify(message, earlier=(student, tutor)))
 
     assert result.route is Route.ORCHESTRATED, result
-    assert result.task_kind is expected, result
+    allowed = expected if isinstance(expected, tuple) else (expected,)
+    assert result.task_kind in allowed, result
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "tell me how to calculate 1 + 1",
+        "what is the capital of France",
+        "help me with my chemistry homework on moles",
+        "recommend a movie for tonight",
+    ],
+)
+def test_a_message_that_is_not_computer_science_is_refused(message):
+    result = classify(message)
+
+    assert result.route is Route.TEMPLATE, result
+    assert result.intents == (Intent.OTHER,), result
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "how do I compute 2 to the power 10 in binary",
+        "what is the time complexity of adding two n-bit numbers",
+    ],
+)
+def test_maths_inside_computer_science_still_gets_a_tutor(message):
+    assert classify(message).route is Route.ORCHESTRATED

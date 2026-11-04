@@ -2,7 +2,7 @@
 
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
@@ -18,3 +18,5 @@ class RunContext:
     search: Any = None
     # Records a metadata-only event on the run, for the Admin timeline. Never fails a tool.
     record: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
+    # Quizzes post_quiz laid out in this turn. The student sees them exactly as written here.
+    posted_quizzes: list[str] = field(default_factory=list)

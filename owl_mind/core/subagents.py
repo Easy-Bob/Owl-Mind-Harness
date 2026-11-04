@@ -16,7 +16,7 @@ from owl_mind.tools.planner import (
     reset_progress,
 )
 from owl_mind.tools.practice import analyze_complexity, build_hint
-from owl_mind.tools.quiz import generate_quiz_spec, grade_answer, pin_rubric
+from owl_mind.tools.quiz import post_quiz
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ TOOL_SCOPES: dict[Subagent, tuple[str, ...]] = {
         "commit_study_plan",
         "reset_progress",
     ),
-    Subagent.QUIZ_MASTER: ("materials_search", "generate_quiz_spec", "pin_rubric", "grade_answer"),
+    Subagent.QUIZ_MASTER: ("materials_search", "post_quiz"),
 }
 
 TUTORS: dict[Subagent, TutorSpec] = {
@@ -67,9 +67,9 @@ TUTORS: dict[Subagent, TutorSpec] = {
         800,
     ),
     Subagent.QUIZ_MASTER: TutorSpec(
-        "Writes quizzes and grades answers against pinned rubrics.",
+        "Writes multiple-choice quizzes, with the answers at the end.",
         prompts.QUIZ_MASTER,
-        (materials_search, generate_quiz_spec, pin_rubric, grade_answer),
+        (materials_search, post_quiz),
         1200,
     ),
 }

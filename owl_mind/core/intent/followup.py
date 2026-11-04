@@ -2,7 +2,8 @@
 
 Owner's rule: a message gets the previous chat only when it has a word pointing back, such as
 "it" or "them", and no specific noun of its own. "Quiz me on it" does; "quiz me on Bloom
-filters" and "thanks, now plan my week" don't. This is code, so it adds no model call.
+filters", "thanks, now plan my week" and a bare "yes" don't. This is code, so it adds no model
+call.
 """
 
 import re
@@ -23,7 +24,7 @@ _NO_TOPIC = POINTING_BACK | {
     "dont", "really", "still", "get", "go", "use", "using", "version", "bit", "little", "lot",
 }  # fmt: skip
 _WORD = re.compile(r"[a-z']+")
-EARLIER_CHARS = 400
+EARLIER_CHARS = 200
 
 
 def needs_earlier(message: str) -> bool:
@@ -34,7 +35,7 @@ def needs_earlier(message: str) -> bool:
 
 
 def previous_chat(history: list[dict[str, str]]) -> tuple[str, str] | None:
-    """The student's last message and the tutor's reply to it, each trimmed."""
+    """The student's last message and the tutor's reply to it, each trimmed to its start."""
     for index in range(len(history) - 1, 0, -1):
         if history[index]["role"] == "assistant" and history[index - 1]["role"] == "user":
             return (

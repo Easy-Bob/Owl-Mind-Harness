@@ -235,3 +235,36 @@ def test_real_model_imports_a_file_into_postgres(tmp_path):
         (job.document_id, job.document_id),
     )
     assert near == [("slide 1",)]
+
+
+def test_topics_are_saved_merged_and_go_with_their_document(store):
+    # Names no real course file has, because this database holds the developer's own files too.
+    mark = uuid.uuid4().hex[:6]
+    shared, own = f"Zq shared {mark}", f"Zq own {mark}"
+
+    async def body():
+        async with store() as materials:
+            ids = []
+            for name in ("a", "b"):
+                texts = [f"{name} {mark}"]
+                ids.append(
+                    await materials.save_document(
+                        name, ".md", unique_hash(), None, UPLOADER, chunks(texts), fake_embed(texts)
+                    )
+                )
+            unnamed = {d for d, _, _ in await materials.documents_without_topics()}
+            await materials.set_topics(ids[0], [shared, own])
+            await materials.set_topics(ids[1], [shared.upper()])
+            both = await materials.list_topics(limit=1000)
+            still_unnamed = {d for d, _, _ in await materials.documents_without_topics()}
+            await materials.delete_document(ids[0])
+            after = await materials.list_topics(limit=1000)
+            return ids, unnamed, both, still_unnamed, after
+
+    ids, unnamed, both, still_unnamed, after = asyncio.run(body())
+    assert set(ids) <= unnamed
+    assert not set(ids) & still_unnamed
+    assert both.index(shared) < both.index(own)  # In two documents, so it ranks first.
+    assert shared.upper() not in both
+    assert own not in after
+    assert shared in after or shared.upper() in after

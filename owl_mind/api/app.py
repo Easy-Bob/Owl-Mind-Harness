@@ -37,6 +37,7 @@ from owl_mind.materials.embedding import FastEmbedEmbedder
 from owl_mind.materials.ingest import Ingestor
 from owl_mind.materials.search import MaterialsSearch, RedisSearchCache
 from owl_mind.materials.store import PostgresMaterialsStore
+from owl_mind.materials.topics import TopicNamer
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
 from owl_mind.services.admin_store import PostgresAdminStore
 from owl_mind.services.approvals import PostgresApprovalStore
@@ -122,7 +123,9 @@ async def _production_services() -> AsyncIterator[Services]:
     client = Redis.from_url(settings.redis_url, socket_timeout=_REDIS_TIMEOUT_SECONDS)
     embedder = FastEmbedEmbedder(settings.embedding_model, settings.embedding_cache_dir)
     materials_store = PostgresMaterialsStore(sessions)
-    ingestor = Ingestor(materials_store, embedder, settings.ingest_timeout_seconds)
+    # Topics are named only with a model key. Without one, imports still work.
+    namer = TopicNamer(get_chat_model) if settings.deepseek_api_key else None
+    ingestor = Ingestor(materials_store, embedder, settings.ingest_timeout_seconds, namer)
     search = MaterialsSearch(sessions, materials_store, embedder, RedisSearchCache(client))
     forum = _forum(settings)
     forum_accounts = _forum_accounts(settings, sessions)

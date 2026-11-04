@@ -8,13 +8,14 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from owl_mind.api.deps import current_student, get_services
 from owl_mind.api.schemas import HistoryMessage, MessageIn, RunStarted, ThreadOut
+from owl_mind.core import replies
 from owl_mind.core.events import TERMINAL_KINDS
-from owl_mind.core.runtime import RunRequest, Services, execute_run, read_history
+from owl_mind.core.runtime import RunRequest, Services, course_topics, execute_run, read_history
 from owl_mind.core.telemetry import record_activity
 from owl_mind.services.run_store import FINISHED, WAITING, ActiveRunExists
 
@@ -225,3 +226,35 @@ async def reject(
     run_id: uuid.UUID, http: Request, student: Student, services: ServicesDep
 ) -> RunStarted:
     return await _decide(run_id, False, http, student, services)
+
+
+# -- citations ----------------------------------------------------------------
+
+_MAX_CITATIONS = 20
+
+
+@router.get("/citations")
+async def citations(
+    ids: Annotated[str, Query(max_length=2000)], student: Student, services: ServicesDep
+) -> dict:
+    """Where each [cite:ID] in an answer comes from. Every student can search the same notes."""
+    wanted = list(dict.fromkeys(part.strip() for part in ids.split(",") if part.strip()))
+    if len(wanted) > _MAX_CITATIONS:
+        raise HTTPException(status_code=422, detail=f"At most {_MAX_CITATIONS} citations")
+    found = await services.search.resolve(wanted) if services.search is not None else {}
+    return {
+        citation_id: (
+            {"title": c.title, "location": c.location, "url": c.source_url} if c else None
+        )
+        for citation_id, c in ((i, found.get(i)) for i in wanted)
+    }
+
+
+@router.get("/help")
+async def help_page(student: Student, services: ServicesDep) -> dict:
+    """What a student can ask, and the course notes' topics, which change with each import."""
+    return {
+        "can_help_with": [{"what": w, "example": e} for w, e in replies.CAN_HELP_WITH],
+        "cannot": replies.CANNOT,
+        "topics": await course_topics(services),
+    }

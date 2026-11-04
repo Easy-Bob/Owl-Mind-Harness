@@ -8,7 +8,7 @@ from owl_mind.core import replies
 from owl_mind.core.integrity import MAX_CODE_LINES, REVIEWER_PROMPT, SolutionLeakGuard, code_lines
 from owl_mind.services.admin_store import safe_event
 from tests.guard_rails import check_answer_checked_first
-from tests.test_filesystem import say, task
+from tests.test_filesystem import call, say, task
 from tests.test_runtime import (
     HINT,
     World,
@@ -150,12 +150,39 @@ def test_a_concept_explanation_is_not_checked_and_streams_as_before():
     assert len(world.fake.requests) == 4
 
 
-def test_a_quiz_turn_is_checked():
-    world = World(intent(quiz_request=0.9), task("quiz_master"), say("r"), say("1. Q?"), HINT)
+QUIZ_QUESTION = {
+    "text": "Where is a min-heap's smallest item?",
+    "options": ["At the root", "At a leaf", "In the middle", "Anywhere"],
+    "answer": ["A"],
+}
+
+
+def test_a_quiz_turn_shows_the_code_made_quiz_and_needs_no_review_or_rewrite_call():
+    world = World(
+        intent(quiz_request=0.9),
+        task("quiz_master"),
+        call("post_quiz", topic="heaps", questions=[QUIZ_QUESTION]),
+        say("Posted a one-question quiz."),
+    )
+    events, saved = run(world, "quiz me on heaps")
+
+    shown = text_of(events)
+    assert shown.startswith("**Quiz: heaps**\n\n1. Where is a min-heap's smallest item?")
+    assert shown.endswith("**Answers:** 1. A")
+    assert "Posted a one-question quiz." not in shown
+    assert saved == shown
+    assert integrity(events) == {"result": "passed", "reason": None, "layer": "quiz"}
+    assert check_answer_checked_first(events) == []
+    # Intent, orchestrator, and two tutor calls: no orchestrator rewrite, no reviewer.
+    assert len(world.fake.requests) == 4
+
+
+def test_a_quiz_turn_whose_tutor_posted_nothing_is_reviewed_as_before():
+    world = World(intent(quiz_request=0.9), task("quiz_master"), say("1. Q?"), HINT)
     events, _ = run(world, "quiz me on heaps")
 
-    assert integrity(events)["result"] == "passed"
-    assert check_answer_checked_first(events) == []
+    assert text_of(events) == "1. Q?"
+    assert integrity(events)["layer"] == "reviewer"
 
 
 def test_a_two_tutor_turn_with_a_quiz_is_checked_as_one_answer():
@@ -329,3 +356,24 @@ def test_turns_not_checked_at_the_end_check_each_tutor_reply(
 
     present = any(isinstance(m, ReportCheckMiddleware) for m in captured["middleware"])
     assert present is has_report_check
+
+
+def test_a_two_tutor_turn_joins_the_code_made_quiz_and_reviews_only_the_explanation():
+    world = World(
+        intent(concept_explain=0.9, quiz_request=0.8),
+        task("concept_tutor"),
+        say("A heap keeps its smallest item at the root."),
+        task("quiz_master"),
+        call("post_quiz", topic="heaps", questions=[QUIZ_QUESTION]),
+        say("Posted."),
+        HINT,
+    )
+    events, _ = run(world, "explain heaps then quiz me")
+
+    shown = text_of(events)
+    assert shown.startswith("A heap keeps its smallest item at the root.")
+    assert "Now let's check your understanding.\n\n**Quiz: heaps**" in shown
+    assert shown.endswith("**Answers:** 1. A")
+    reviewed = world.fake.requests[-1]["messages"][1]["content"]
+    assert "A heap keeps its smallest item at the root." in reviewed
+    assert "**Answers:**" not in reviewed
