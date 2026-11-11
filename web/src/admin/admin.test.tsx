@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
@@ -82,7 +82,7 @@ describe("Admin mode", () => {
     expect(await screen.findByLabelText("Your message")).toBeVisible();
   });
 
-  it("shows the five Admin pages", async () => {
+  it("shows the seven Admin pages", async () => {
     server({ "/admin/requests": { items: [], total: 0, page: 1, size: 25 } });
     const user = userEvent.setup();
     render(<App />);
@@ -96,7 +96,112 @@ describe("Admin mode", () => {
       "Users",
       "Model calls",
       "Savings",
+      "Quality",
+      "Reliability",
     ]);
+  });
+
+  const quality = {
+    days: 30,
+    evals: [
+      {
+        file: "2026-11-11-m4a.json",
+        date: "2026-11-11",
+        prompt_version: "m4a",
+        large_model: "deepseek-flash",
+        scores: {
+          "intent.accuracy": 0.9923,
+          "intent.follow_up_accuracy": 1,
+          "dialogue.delegation_rate": 0.9474,
+          "dialogue.citation_rate": null,
+          "adversarial.leak_rate": 0,
+          "dialogue.judge.correctness": 4.525,
+          "dialogue.cost_per_turn_usd": 0.00272,
+        },
+      },
+    ],
+    live: [
+      {
+        prompt_version: "m4a",
+        runs: 40,
+        clarify_rate: 0.025,
+        stopped_rate: null,
+        learn_answers: 10,
+        learn_citation_rate: 0.8,
+        integrity_checked: 12,
+        integrity_passed: 10,
+        integrity_retried: 1,
+        integrity_blocked: 1,
+        integrity_blocked_rate: 1 / 12,
+      },
+    ],
+  };
+
+  it("shows eval results by prompt version and live quality, unknown where missing", async () => {
+    server({ "/admin/requests": { items: [], total: 0, page: 1, size: 25 }, "/admin/quality": quality });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openAdmin(user);
+    await user.click(screen.getByRole("button", { name: "Quality" }));
+
+    const page = await screen.findByRole("region", { name: "Quality" });
+    const [evals, live] = within(page).getAllByRole("table");
+    expect(within(evals).getByRole("row", { name: /m4a/ })).toHaveTextContent("99%");
+    expect(within(evals).getByRole("row", { name: /m4a/ })).toHaveTextContent("unknown");
+    expect(within(evals).getByRole("row", { name: /m4a/ })).toHaveTextContent("4.53");
+    expect(within(live).getByRole("row", { name: /m4a/ })).toHaveTextContent("80% of 10");
+    expect(within(live).getByRole("row", { name: /m4a/ })).toHaveTextContent("12 (1 retried)");
+  });
+
+  const reliability = {
+    days: 14,
+    trouble: [{ day: "2026-11-11", status: "stopped", reason: "time_limit", runs: 2 }],
+    runs_per_day: [{ day: "2026-11-11", runs: 30 }],
+    workers_used: true,
+    workers: [
+      { worker: "host-1", seconds_ago: 4 },
+      { worker: "host-2", seconds_ago: 300 },
+    ],
+    jobs: [{ job: "approvals", success: Date.now() / 1000 - 30, failure: null }],
+    dead_letters: [{ run_id: "r9", deliveries: 4, at: 1762862400 }],
+    dead_letter_total: 1,
+    queue: { lag: 3, pending: 1 },
+  };
+
+  it("shows troubled runs, workers, jobs and dead letters, and opens a dead run's timeline", async () => {
+    const calls = server({
+      "/admin/requests/r9": { ...run, id: "r9", events: [], calls: [] },
+      "/admin/requests": { items: [], total: 0, page: 1, size: 25 },
+      "/admin/reliability": reliability,
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openAdmin(user);
+    await user.click(screen.getByRole("button", { name: "Reliability" }));
+
+    const page = await screen.findByRole("region", { name: "Reliability" });
+    expect(page).toHaveTextContent("2026-11-11: 2 stopped, time limit");
+    expect(page).toHaveTextContent("3 waiting, 1 being run");
+    expect(page).toHaveTextContent("host-2: reported 300 s ago (not reporting)");
+    expect(page).toHaveTextContent("approvals: last success 30 s ago, last failure never");
+    await user.click(within(page).getByRole("button", { name: "r9" }));
+    await waitFor(() => expect(calls).toContain("/admin/requests/r9"));
+  });
+
+  it("says when there are no workers to show", async () => {
+    server({
+      "/admin/requests": { items: [], total: 0, page: 1, size: 25 },
+      "/admin/reliability": { days: 14, trouble: [], runs_per_day: [], workers_used: false },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openAdmin(user);
+    await user.click(screen.getByRole("button", { name: "Reliability" }));
+
+    expect(await screen.findByText(/no workers or queue to show/)).toBeVisible();
   });
 
   const window = {

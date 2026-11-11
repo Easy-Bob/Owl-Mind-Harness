@@ -1,11 +1,14 @@
-"""Admin's Overview, Users and Savings figures. Counts, tokens, costs and statuses only.
+"""Admin's Overview, Users, Savings, Quality and Reliability figures. Counts, tokens, costs and
+statuses only.
 
 Every query reads metadata: runs, run events and ops.model_calls. None reads a message, a
 thread title or memory. A missing figure stays None, which the page shows as unknown, never 0.
 """
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -203,4 +206,111 @@ async def savings(session: AsyncSession, days: int) -> dict[str, Any]:
         "integrity": counts.get("integrity", {}),
         "joined": counts.get("answer", {}).get("joined", 0),
         "runs": (await _rows(session, _NO_AGENT, params))[0],
+    }
+
+
+# -- Quality and Reliability (M4-F) ----------------------------------------------------------
+
+# A run's prompt version is the one its model calls carry. A run that made no call has none.
+_QUALITY = """
+WITH versions AS (
+    SELECT run_id, max(prompt_version) AS prompt_version
+    FROM ops.model_calls WHERE called_at >= :since GROUP BY run_id
+)
+SELECT coalesce(v.prompt_version, 'none') AS prompt_version,
+    count(*) AS runs,
+    count(*) FILTER (WHERE r.status = 'stopped') AS stopped,
+    count(*) FILTER (WHERE rep.payload->>'reply' = 'clarify') AS clarified,
+    count(*) FILTER (WHERE r.task_kind = 'learn' AND st.run_id IS NOT NULL) AS learn_answers,
+    count(*) FILTER (WHERE r.task_kind = 'learn' AND (st.payload->>'citations')::int > 0)
+        AS learn_cited,
+    count(*) FILTER (WHERE i.payload->>'result' = 'passed') AS integrity_passed,
+    count(*) FILTER (WHERE i.payload->>'result' = 'retried') AS integrity_retried,
+    count(*) FILTER (WHERE i.payload->>'result' = 'blocked') AS integrity_blocked
+FROM app.runs r
+LEFT JOIN versions v ON v.run_id = r.id
+LEFT JOIN app.run_events rep ON rep.run_id = r.id AND rep.kind = 'reply'
+LEFT JOIN app.run_events st ON st.run_id = r.id AND st.kind = 'answer_stats'
+LEFT JOIN app.run_events i ON i.run_id = r.id AND i.kind = 'integrity'
+WHERE r.created_at >= :since
+GROUP BY 1 ORDER BY 1
+"""
+_TROUBLE = """
+SELECT (r.created_at AT TIME ZONE 'UTC')::date AS day, r.status,
+    coalesce(nullif(d.payload->>'reason', ''), CASE WHEN r.status = 'failed' THEN 'error' END,
+             'unknown') AS reason,
+    count(DISTINCT r.id) AS runs
+FROM app.runs r
+LEFT JOIN app.run_events d ON d.run_id = r.id AND d.kind IN ('done', 'error')
+WHERE r.created_at >= :since AND r.status IN ('failed', 'stopped')
+GROUP BY 1, 2, 3 ORDER BY 1 DESC, 2, 3
+"""
+_RUN_TOTALS = """
+SELECT (created_at AT TIME ZONE 'UTC')::date AS day, count(*) AS runs
+FROM app.runs WHERE created_at >= :since GROUP BY 1 ORDER BY 1 DESC
+"""
+
+# The scores shown from each committed eval results file, as (part, score).
+EVAL_SCORES = [
+    ("intent", "accuracy"),
+    ("intent", "follow_up_accuracy"),
+    ("dialogue", "delegation_rate"),
+    ("dialogue", "citation_rate"),
+    ("dialogue", "cost_per_turn_usd"),
+    ("dialogue", "judge.correctness"),
+    ("dialogue", "judge.faithfulness"),
+    ("dialogue", "judge.scope"),
+    ("adversarial", "leak_rate"),
+    ("adversarial", "valid_blocked_rate"),
+]
+
+
+def eval_results(folder: Path) -> list[dict[str, Any]]:
+    """Each committed eval results file, newest first. Numbers only: the files hold no text."""
+    found = []
+    for path in sorted(folder.glob("*.json"), reverse=True):
+        try:
+            report = json.loads(path.read_text())
+        except ValueError:
+            continue
+        scores = {}
+        for part, score in EVAL_SCORES:
+            value: Any = report.get(part, {})
+            for key in score.split("."):
+                value = value.get(key) if isinstance(value, dict) else None
+            scores[f"{part}.{score}"] = value if isinstance(value, int | float) else None
+        found.append(
+            {
+                "file": path.name,
+                "date": report.get("date"),
+                "prompt_version": report.get("prompt_version"),
+                "large_model": report.get("large_model"),
+                "scores": scores,
+            }
+        )
+    return found
+
+
+def _share(part: int, whole: int) -> float | None:
+    return part / whole if whole else None
+
+
+async def quality(session: AsyncSession, days: int) -> dict[str, Any]:
+    rows = await _rows(session, _QUALITY, {"since": datetime.now(UTC) - timedelta(days=days)})
+    for row in rows:
+        checked = row["integrity_passed"] + row["integrity_retried"] + row["integrity_blocked"]
+        row["clarify_rate"] = _share(row["clarified"], row["runs"])
+        row["stopped_rate"] = _share(row["stopped"], row["runs"])
+        row["learn_citation_rate"] = _share(row["learn_cited"], row["learn_answers"])
+        row["integrity_checked"] = checked
+        row["integrity_blocked_rate"] = _share(row["integrity_blocked"], checked)
+    return {"days": days, "live": rows}
+
+
+async def reliability(session: AsyncSession, days: int) -> dict[str, Any]:
+    params = {"since": datetime.now(UTC) - timedelta(days=days)}
+    return {
+        "days": days,
+        "trouble": await _rows(session, _TROUBLE, params),
+        "runs_per_day": await _rows(session, _RUN_TOTALS, params),
     }

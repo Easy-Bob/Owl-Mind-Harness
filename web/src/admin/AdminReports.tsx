@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { adminApi, type Overview, type Savings, type UserRow, type UserUsage } from "./adminApi";
+import {
+  adminApi,
+  type Overview,
+  type Quality,
+  type Reliability,
+  type Savings,
+  type UserRow,
+  type UserUsage,
+} from "./adminApi";
 
 // Null means nothing reported it. It must never read as 0.
 const unknown = "unknown";
@@ -194,6 +202,178 @@ export function SavingsPage() {
             <small>{data.how.no_agent}</small>
           </dd>
         </dl>
+      )}
+    </section>
+  );
+}
+
+// Eval scores, in the order the Quality table shows them.
+const EVAL_COLUMNS: [string, string, (value: number | null) => string][] = [
+  ["intent.accuracy", "Intent", percent],
+  ["intent.follow_up_accuracy", "Follow-ups", percent],
+  ["dialogue.delegation_rate", "Delegation", percent],
+  ["dialogue.citation_rate", "Citations", percent],
+  ["adversarial.leak_rate", "Leaks", percent],
+  ["dialogue.judge.correctness", "Correct (judge)", (v) => (v == null ? unknown : v.toFixed(2))],
+  ["dialogue.cost_per_turn_usd", "Cost per turn", usd],
+];
+
+export function QualityPage() {
+  const { data, error } = useLoad<Quality>(() => adminApi.quality(30));
+  return (
+    <section aria-label="Quality">
+      <h2>Quality</h2>
+      {error && <p role="alert">{error}</p>}
+      {data && (
+        <>
+          <h3>Eval results, by date and prompt version</h3>
+          {data.evals.length === 0 ? (
+            <p>No eval results are committed yet.</p>
+          ) : (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Prompt</th>
+                    {EVAL_COLUMNS.map(([key, name]) => (
+                      <th key={key}>{name}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.evals.map((row) => (
+                    <tr key={row.file}>
+                      <td>{row.date ?? unknown}</td>
+                      <td>{row.prompt_version ?? unknown}</td>
+                      {EVAL_COLUMNS.map(([key, , show]) => (
+                        <td key={key}>{show(row.scores[key] ?? null)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <h3>Live, last {data.days} days, by prompt version</h3>
+          {data.live.length === 0 ? (
+            <p>No runs in this period.</p>
+          ) : (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Prompt</th>
+                    <th>Runs</th>
+                    <th>Clarified</th>
+                    <th>Stopped</th>
+                    <th>Learn answers cited</th>
+                    <th>Checked</th>
+                    <th>Blocked</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.live.map((row) => (
+                    <tr key={row.prompt_version}>
+                      <td>{row.prompt_version}</td>
+                      <td>{count(row.runs)}</td>
+                      <td>{percent(row.clarify_rate)}</td>
+                      <td>{percent(row.stopped_rate)}</td>
+                      <td>
+                        {percent(row.learn_citation_rate)} of {count(row.learn_answers)}
+                      </td>
+                      <td>
+                        {count(row.integrity_checked)} ({row.integrity_retried} retried)
+                      </td>
+                      <td>{percent(row.integrity_blocked_rate)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+const ago = (seconds: number | null | undefined, now: number) =>
+  seconds == null ? "never" : `${Math.max(0, Math.round(now - seconds))} s ago`;
+
+export function ReliabilityPage({ onOpenRun }: { onOpenRun?: (runId: string) => void }) {
+  const { data, error } = useLoad<Reliability>(() => adminApi.reliability(14));
+  const now = Date.now() / 1000;
+  return (
+    <section aria-label="Reliability">
+      <h2>Reliability</h2>
+      {error && <p role="alert">{error}</p>}
+      {data && (
+        <>
+          <h3>Failed and stopped runs, last {data.days} days</h3>
+          {data.trouble.length === 0 ? (
+            <p>None.</p>
+          ) : (
+            <ul>
+              {data.trouble.map((row) => (
+                <li key={`${row.day}-${row.status}-${row.reason}`}>
+                  {row.day}: {row.runs} {row.status}, {words(row.reason)}
+                </li>
+              ))}
+            </ul>
+          )}
+          {!data.workers_used ? (
+            <p>Runs and jobs run in the API process, so there are no workers or queue to show.</p>
+          ) : data.worker_status_error ? (
+            <p role="alert">{data.worker_status_error}</p>
+          ) : (
+            <>
+              <h3>Queue</h3>
+              <p>
+                {data.queue?.lag ?? 0} waiting, {data.queue?.pending ?? 0} being run
+              </p>
+              <h3>Workers</h3>
+              {data.workers?.length ? (
+                <ul>
+                  {data.workers.map((w) => (
+                    <li key={w.worker} className={w.seconds_ago > 60 ? "stale" : undefined}>
+                      {w.worker}: reported {w.seconds_ago} s ago{w.seconds_ago > 60 && " (not reporting)"}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p role="alert">No worker has reported.</p>
+              )}
+              <h3>Background jobs</h3>
+              <ul>
+                {data.jobs?.map((job) => (
+                  <li key={job.job}>
+                    {words(job.job)}: last success {ago(job.success, now)}, last failure {ago(job.failure, now)}
+                  </li>
+                ))}
+              </ul>
+              <h3>Dead letters ({data.dead_letter_total ?? 0})</h3>
+              {data.dead_letters?.length ? (
+                <ul>
+                  {data.dead_letters.map((dead, n) => (
+                    <li key={`${dead.run_id}-${n}`}>
+                      {dead.run_id && onOpenRun ? (
+                        <button type="button" className="link" onClick={() => onOpenRun(dead.run_id!)}>
+                          {dead.run_id}
+                        </button>
+                      ) : (
+                        (dead.run_id ?? "unreadable entry")
+                      )}{" "}
+                      after {dead.deliveries} attempts, {new Date(dead.at * 1000).toISOString()}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>None.</p>
+              )}
+            </>
+          )}
+        </>
       )}
     </section>
   );

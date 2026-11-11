@@ -11,6 +11,9 @@ from owl_mind.api.deps import CurrentUser, get_services, require_admin
 from owl_mind.core.config import get_settings
 from owl_mind.core.intent.taxonomy import Route
 from owl_mind.core.runtime import Services
+from owl_mind.evaluation.check_baseline import RESULTS
+from owl_mind.services.admin_reports import eval_results
+from owl_mind.worker.runs import worker_status
 
 __all__ = ["admin_router"]
 
@@ -84,6 +87,31 @@ async def user_usage(student_id: uuid.UUID, admin: Admin, services: ServicesDep)
         raise HTTPException(status_code=404, detail="Student not found")
     usage["budget_used_today"] = (await _budget_share(services, student_id))["student"]
     return usage
+
+
+@admin_router.get("/quality")
+async def quality(
+    services: ServicesDep, days: Annotated[int, Query(ge=1, le=400)] = 30
+) -> dict[str, Any]:
+    """Eval results by date and prompt version, and live quality figures (M4-F)."""
+    result = await services.admin.quality(days)
+    result["evals"] = eval_results(RESULTS)
+    return result
+
+
+@admin_router.get("/reliability")
+async def reliability(
+    services: ServicesDep, days: Annotated[int, Query(ge=1, le=90)] = 14
+) -> dict[str, Any]:
+    """Failed and stopped runs, and how the workers, jobs and queue are doing (M4-F)."""
+    result = await services.admin.reliability(days)
+    result["workers_used"] = services.queue is not None
+    if services.queue is not None:
+        try:
+            result.update(await worker_status(services.queue))
+        except Exception:
+            result["worker_status_error"] = "Worker status couldn't be read from Redis."
+    return result
 
 
 @admin_router.get("/savings")

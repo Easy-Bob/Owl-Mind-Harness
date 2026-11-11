@@ -57,6 +57,8 @@ ADMIN_PATHS = [
     "/admin/users",
     f"/admin/users/{uuid.uuid4()}",
     "/admin/savings",
+    "/admin/quality",
+    "/admin/reliability",
 ]
 
 
@@ -83,7 +85,7 @@ def test_admin_reaches_the_pages(world):
         logged_in(client, email=ADMIN_EMAIL)
         assert client.get("/admin/requests").status_code == 200
         assert client.get("/admin/model-calls").status_code == 200
-        for path in ("/admin/overview", "/admin/users", "/admin/savings"):
+        for path in ("/admin/overview", "/admin/users", "/admin/savings", "/admin/quality"):
             assert client.get(path).status_code == 200
 
 
@@ -384,3 +386,66 @@ def test_publish_is_restored_afterward(monkeypatch):
     asyncio.run(measure(services, messages=("hello",)))
 
     assert telemetry.publish is original
+
+
+# -- Quality and Reliability (M4-F) ---------------------------------------------------------
+
+
+def test_quality_lists_every_committed_eval_results_file_newest_first(world):
+    from owl_mind.evaluation.check_baseline import RESULTS
+
+    with world.client() as client:
+        logged_in(client, email=ADMIN_EMAIL)
+        quality = client.get("/admin/quality").json()
+
+    files = sorted((p.name for p in RESULTS.glob("*.json")), reverse=True)
+    assert [row["file"] for row in quality["evals"]] == files
+    first = quality["evals"][0]
+    assert set(first["scores"]) >= {"intent.accuracy", "adversarial.leak_rate"}
+    assert all(v is None or isinstance(v, int | float) for v in first["scores"].values())
+
+
+def test_reliability_without_workers_says_so(world):
+    with world.client() as client:
+        logged_in(client, email=ADMIN_EMAIL)
+        page = client.get("/admin/reliability").json()
+
+    assert page["workers_used"] is False and "workers" not in page
+
+
+def test_reliability_shows_a_redis_failure_instead_of_failing(world):
+    class BrokenQueue:
+        client = None
+
+        async def depth(self):
+            raise ConnectionError("down")
+
+    world.services = world.services.__class__(**{**vars(world.services), "queue": BrokenQueue()})
+    world.app.dependency_overrides.clear()
+    with world.client() as client:
+        logged_in(client, email=ADMIN_EMAIL)
+        page = client.get("/admin/reliability")
+
+    assert page.status_code == 200
+    assert page.json()["worker_status_error"] == "Worker status couldn't be read from Redis."
+
+
+def test_a_run_records_its_fixed_reply_and_its_answers_citation_count(monkeypatch):
+    from tests.test_filesystem import task
+
+    monkeypatch.setenv("LIVE_AGENT_RUNS_ENABLED", "true")
+    get_settings.cache_clear()
+    world = World(intent(concept_explain=0.9), task("concept_tutor"), say("r"),
+                  say("Heaps [cite:a] keep order [cite:b]."))  # fmt: skip
+    with world.client() as client:
+        learn = start(client, "explain heaps")
+        stream(client, learn["run_id"])
+        hello = start(client, "hello")
+        stream(client, hello["run_id"])
+
+    def recorded(run_id, kind):
+        return [d for (r, _), (k, d) in world.runs.events.items() if str(r) == run_id and k == kind]
+
+    assert recorded(learn["run_id"], "answer_stats") == [{"citations": 2}]
+    assert recorded(hello["run_id"], "reply") == [{"reply": "greeting"}]
+    assert recorded(hello["run_id"], "answer_stats") == []

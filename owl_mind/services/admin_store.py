@@ -228,6 +228,10 @@ class AdminStore(Protocol):
 
     async def savings(self, days: int) -> dict[str, Any]: ...
 
+    async def quality(self, days: int) -> dict[str, Any]: ...
+
+    async def reliability(self, days: int) -> dict[str, Any]: ...
+
 
 class PostgresAdminStore:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
@@ -299,6 +303,14 @@ class PostgresAdminStore:
     async def savings(self, days: int) -> dict[str, Any]:
         async with self._sessions() as session:
             return await reports.savings(session, days)
+
+    async def quality(self, days: int) -> dict[str, Any]:
+        async with self._sessions() as session:
+            return await reports.quality(session, days)
+
+    async def reliability(self, days: int) -> dict[str, Any]:
+        async with self._sessions() as session:
+            return await reports.reliability(session, days)
 
     async def model_call_summary(self, days: int) -> dict[str, Any]:
         params = {"days": days}

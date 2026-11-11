@@ -115,6 +115,43 @@ export type Savings = {
   runs: { without_agent: number; with_agent: number };
 };
 
+export type QualityRow = {
+  prompt_version: string;
+  runs: number;
+  clarify_rate: number | null;
+  stopped_rate: number | null;
+  learn_answers: number;
+  learn_citation_rate: number | null;
+  integrity_checked: number;
+  integrity_passed: number;
+  integrity_retried: number;
+  integrity_blocked: number;
+  integrity_blocked_rate: number | null;
+};
+
+export type EvalFile = {
+  file: string;
+  date: string | null;
+  prompt_version: string | null;
+  large_model: string | null;
+  scores: Record<string, number | null>;
+};
+
+export type Quality = { days: number; live: QualityRow[]; evals: EvalFile[] };
+
+export type Reliability = {
+  days: number;
+  trouble: { day: string; status: string; reason: string; runs: number }[];
+  runs_per_day: { day: string; runs: number }[];
+  workers_used: boolean;
+  worker_status_error?: string;
+  workers?: { worker: string; seconds_ago: number }[];
+  jobs?: { job: string; success: number | null; failure: number | null }[];
+  dead_letters?: { run_id: string | null; deliveries: number; at: number }[];
+  dead_letter_total?: number;
+  queue?: { lag: number; pending: number };
+};
+
 export const adminApi = {
   requests: (query: string, page: number, size: number, route = "") =>
     request<RequestPage>(
@@ -127,4 +164,6 @@ export const adminApi = {
     request<{ users: UserRow[]; daily_tokens: number }>(`/admin/users?${new URLSearchParams({ q: query })}`),
   user: (studentId: string) => request<UserUsage>(`/admin/users/${studentId}`),
   savings: (days: number) => request<Savings>(`/admin/savings?days=${days}`),
+  quality: (days: number) => request<Quality>(`/admin/quality?days=${days}`),
+  reliability: (days: number) => request<Reliability>(`/admin/reliability?days=${days}`),
 };

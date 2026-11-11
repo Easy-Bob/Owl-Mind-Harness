@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from collections.abc import Callable
@@ -97,6 +98,9 @@ def _budget_stop(stop: BudgetStop) -> tuple[str, str]:
     return replies.AGENTS_PAUSED, f"{scope}_budget" if scope == "global" else "budget_unavailable"
 
 
+_CITATION = re.compile(r"\[cite:[^\]\s]+\]")
+
+
 class _Emitter:
     """Sends live events and records them. Neither failure may fail the run."""
 
@@ -106,6 +110,9 @@ class _Emitter:
         self._count = 0
         # The run's route and kind once the intent step has chosen them, for metric labels.
         self.route, self.task_kind = "unknown", "none"
+        # The answer's citation markers, counted for the Quality page (M4-F). Only the count
+        # is ever recorded, never the text.
+        self._text: list[str] = []
 
     async def __call__(self, kind: str, data: dict[str, Any]) -> None:
         self._count += 1
@@ -117,7 +124,19 @@ class _Emitter:
         # Answer text stays in the checkpoint. The event record holds what happened, not what
         # was said.
         if kind == "text_delta":
+            self._text.append(str(data.get("text", "")))
             return
+        await self._record(kind, data)
+
+    def citations(self) -> int:
+        return len(_CITATION.findall("".join(self._text)))
+
+    async def note(self, kind: str, data: dict[str, Any]) -> None:
+        """Record an event for Admin without sending it to the student's screen."""
+        self._count += 1
+        await self._record(kind, data)
+
+    async def _record(self, kind: str, data: dict[str, Any]) -> None:
         try:
             key = f"{self._count:06d}:{kind}"
             await self._services.runs.record_event(self._run_id, key, kind, data)
@@ -545,6 +564,9 @@ async def execute_run(services: Services, request: RunRequest) -> None:
         else:
             text = await _fixed_reply(services, request, result, emit)
             await _answer(services, request, text, emit)
+            # Which fixed reply was sent, so the Quality page can count clarifying questions.
+            reply = result.reply.value if result.reply else result.route.value
+            await emit.note("reply", {"reply": reply})
     except _RunStopped as stopped:
         await emit("text_delta", {"text": replies.RUN_STOPPED})
         await _finish(services, request, "stopped", emit, "done", reason=stopped.reason)
@@ -562,6 +584,8 @@ async def execute_run(services: Services, request: RunRequest) -> None:
         await _finish(services, request, "failed", emit, "error", message=replies.RUN_FAILED)
     else:
         status = WAITING if waiting else "completed"
+        if emit.route == Route.ORCHESTRATED.value:
+            await emit.note("answer_stats", {"citations": emit.citations()})
         await _finish(services, request, status, emit, "done")
     finally:
         metrics.RUNS_RUNNING.dec()
