@@ -64,6 +64,21 @@ class FakeAdminStore:
     async def model_call_summary(self, days: int) -> dict:
         return {"days": days}
 
+    async def overview(self) -> dict:
+        return {"today": {}, "last_7_days": {}}
+
+    async def users(self, query: str = "", limit: int = 200) -> list[dict]:
+        return [{"student_id": str(ALICE), "email": "alice@example.com"}]
+
+    async def user_usage(self, student_id: uuid.UUID, viewer_id: uuid.UUID) -> dict | None:
+        if self.detail is None:
+            return None
+        self.views.append((viewer_id, student_id))
+        return {"student_id": str(student_id), "days": [], "runs": []}
+
+    async def savings(self, days: int) -> dict:
+        return {"days": days}
+
 
 class World:
     """An app with in-memory services, a scripted model and a chosen logged-in student."""
