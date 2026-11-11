@@ -8,6 +8,7 @@ import {
   type RequestPage,
   type RunRow,
 } from "./adminApi";
+import { OverviewPage, SavingsPage, UsersPage } from "./AdminReports";
 
 // Null means the provider or the run didn't report it. It must never read as 0.
 const unknown = "unknown";
@@ -351,19 +352,32 @@ function ModelCallsPage() {
   );
 }
 
+const PAGES = [
+  ["overview", "Overview"],
+  ["requests", "Requests"],
+  ["users", "Users"],
+  ["calls", "Model calls"],
+  ["savings", "Savings"],
+] as const;
+
 export function AdminPage() {
-  const [page, setPage] = useState<"requests" | "calls">("requests");
+  const [page, setPage] = useState<(typeof PAGES)[number][0]>("requests");
   return (
     <div className="admin">
       <nav className="admin-nav" aria-label="Admin pages">
-        <button type="button" aria-current={page === "requests" ? "page" : undefined} onClick={() => setPage("requests")}>
-          Requests
-        </button>
-        <button type="button" aria-current={page === "calls" ? "page" : undefined} onClick={() => setPage("calls")}>
-          Model calls
-        </button>
+        {PAGES.map(([id, name]) => (
+          <button key={id} type="button" aria-current={page === id ? "page" : undefined} onClick={() => setPage(id)}>
+            {name}
+          </button>
+        ))}
       </nav>
-      <main className="admin-main">{page === "requests" ? <RequestsPage /> : <ModelCallsPage />}</main>
+      <main className="admin-main">
+        {page === "overview" && <OverviewPage />}
+        {page === "requests" && <RequestsPage />}
+        {page === "users" && <UsersPage />}
+        {page === "calls" && <ModelCallsPage />}
+        {page === "savings" && <SavingsPage />}
+      </main>
     </div>
   );
 }

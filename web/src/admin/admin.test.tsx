@@ -82,7 +82,7 @@ describe("Admin mode", () => {
     expect(await screen.findByLabelText("Your message")).toBeVisible();
   });
 
-  it("shows only the two pages that exist", async () => {
+  it("shows the five Admin pages", async () => {
     server({ "/admin/requests": { items: [], total: 0, page: 1, size: 25 } });
     const user = userEvent.setup();
     render(<App />);
@@ -91,9 +91,102 @@ describe("Admin mode", () => {
 
     const nav = await screen.findByRole("navigation", { name: "Admin pages" });
     expect(within(nav).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Overview",
       "Requests",
+      "Users",
       "Model calls",
+      "Savings",
     ]);
+  });
+
+  const window = {
+    runs: [{ route: "orchestrated", status: "stopped", runs: 2 }],
+    stopped: [{ reason: "token_limit", runs: 2 }],
+    calls: { calls: 9, cost_usd: null, unknown_cost: 9, errors: 1, truncated: 0 },
+  };
+
+  it("shows the overview, with unknown where nothing was reported", async () => {
+    server({ "/admin/requests": { items: [], total: 0, page: 1, size: 25 }, "/admin/overview": { today: window, last_7_days: window, global_budget_used: null } });
+    const user = userEvent.setup();
+    render(<App />);
+    await openAdmin(user);
+    await user.click(await screen.findByRole("button", { name: "Overview" }));
+
+    const page = await screen.findByRole("region", { name: "Overview" });
+    expect(page).toHaveTextContent("Everyone's daily budget used today: unknown");
+    expect(page).toHaveTextContent("9 model calls, unknown (9 with unknown cost), 1 errors");
+    expect(page).toHaveTextContent("stopped for token limit: 2");
+  });
+
+  it("lists users and opens one student's usage", async () => {
+    const calls = server({
+      "/admin/requests": { items: [], total: 0, page: 1, size: 25 },
+      "/admin/users?": {
+        users: [
+          {
+            student_id: "s1",
+            email: "ana@example.com",
+            runs_today: 1,
+            runs_30d: 4,
+            tokens_today: null,
+            tokens_30d: 900,
+            cost_today: null,
+            cost_30d: 0.25,
+            unknown_usage: 1,
+            budget_used_today: 0.4,
+          },
+        ],
+        daily_tokens: 1000000,
+      },
+      "/admin/users/s1": {
+        student_id: "s1",
+        email: "ana@example.com",
+        budget_used_today: 0.4,
+        days: [{ day: "2026-11-11", runs: 1, tokens: null, cost_usd: null, unknown_usage: 1 }],
+        runs: [],
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await openAdmin(user);
+    await user.click(await screen.findByRole("button", { name: "Users" }));
+
+    const row = (await screen.findByRole("cell", { name: "ana@example.com" })).closest("tr");
+    expect(row).toHaveTextContent("unknown");
+    expect(row).toHaveTextContent("40%");
+    expect(calls.some((path) => path.startsWith("/admin/users/"))).toBe(false);
+    await user.click(within(row as HTMLElement).getByRole("button", { name: "Open" }));
+
+    const usage = await screen.findByRole("region", { name: "Student usage" });
+    expect(usage).toHaveTextContent("2026-11-11: 1 runs, unknown tokens, unknown");
+    expect(calls.filter((path) => path === "/admin/users/s1")).toHaveLength(1);
+  });
+
+  it("shows each saving with how it's worked out", async () => {
+    server({
+      "/admin/requests": { items: [], total: 0, page: 1, size: 25 },
+      "/admin/savings": {
+        days: 30,
+        how: { cache: "Cache-hit tokens x (normal - cache price).", summaries: "s", ladder: "l", integrity: "i", joined: "j", no_agent: "n" },
+        cache: { cache_hit_tokens: 750, cache_miss_tokens: 250, saved_usd: 0.0002, cache_hit_rate: 0.75 },
+        summaries: { calls: 0, tokens_removed: null, cost_usd: null },
+        ladder: { wind_down: 3 },
+        integrity: { passed: 5, retried: 1 },
+        joined: 2,
+        runs: { without_agent: 4, with_agent: 6 },
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await openAdmin(user);
+    await user.click(await screen.findByRole("button", { name: "Savings" }));
+
+    const page = await screen.findByRole("region", { name: "Savings" });
+    expect(page).toHaveTextContent("75% of input tokens cached, saving about $0.000200.");
+    expect(page).toHaveTextContent("Cache-hit tokens x (normal - cache price).");
+    expect(page).toHaveTextContent("0 summaries removed about unknown tokens");
+    expect(page).toHaveTextContent("wind down: 3");
+    expect(page).toHaveTextContent("4 of 10 runs.");
   });
 
   it("shows empty states on both pages", async () => {

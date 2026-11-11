@@ -49,7 +49,15 @@ def world() -> World:
 # -- who can reach admin data ------------------------------------------------
 
 
-ADMIN_PATHS = ["/admin/requests", f"/admin/requests/{uuid.uuid4()}", "/admin/model-calls"]
+ADMIN_PATHS = [
+    "/admin/requests",
+    f"/admin/requests/{uuid.uuid4()}",
+    "/admin/model-calls",
+    "/admin/overview",
+    "/admin/users",
+    f"/admin/users/{uuid.uuid4()}",
+    "/admin/savings",
+]
 
 
 @pytest.mark.parametrize("path", ADMIN_PATHS)
@@ -75,6 +83,38 @@ def test_admin_reaches_the_pages(world):
         logged_in(client, email=ADMIN_EMAIL)
         assert client.get("/admin/requests").status_code == 200
         assert client.get("/admin/model-calls").status_code == 200
+        for path in ("/admin/overview", "/admin/users", "/admin/savings"):
+            assert client.get(path).status_code == 200
+
+
+def test_overview_and_users_add_budget_use_from_the_counters(world):
+    from datetime import UTC, datetime
+
+    from tests.test_filesystem import ALICE
+
+    today = datetime.now(UTC).date()
+    world.budgets.students[(ALICE, today)] = 250_000
+    world.budgets.totals[today] = 1_000_000
+    world.admin.detail = {"id": "x"}
+    with world.client() as client:
+        logged_in(client, email=ADMIN_EMAIL)
+        overview = client.get("/admin/overview").json()
+        users = client.get("/admin/users").json()
+        usage = client.get(f"/admin/users/{ALICE}").json()
+
+    assert overview["global_budget_used"] == 0.5  # $1.00 of the $2.00 daily budget.
+    assert users["users"][0]["budget_used_today"] == 0.25
+    assert usage["budget_used_today"] == 0.25
+    assert len(world.admin.views) == 1
+
+
+def test_budget_use_is_unknown_when_the_counters_are_down(world):
+    world.budgets.down = True
+    with world.client() as client:
+        logged_in(client, email=ADMIN_EMAIL)
+        overview = client.get("/admin/overview").json()
+
+    assert overview["global_budget_used"] is None
 
 
 @pytest.mark.parametrize("query", ["page=0", "size=0", "size=101", "page=x", "q=" + "x" * 321])

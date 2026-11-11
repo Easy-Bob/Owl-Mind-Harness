@@ -7,6 +7,8 @@ from typing import Any, Protocol, runtime_checkable
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from owl_mind.services import admin_reports as reports
+
 # Event payloads may hold model-written text, so only these fields are ever shown.
 _SAFE_EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     "tool_start": ("name", "agent"),
@@ -215,6 +217,17 @@ class AdminStore(Protocol):
 
     async def model_call_summary(self, days: int) -> dict[str, Any]: ...
 
+    async def overview(self) -> dict[str, Any]: ...
+
+    async def users(self, query: str = "", limit: int = 200) -> list[dict[str, Any]]: ...
+
+    async def user_usage(
+        self, student_id: uuid.UUID, viewer_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        """One student's usage, and record that this viewer opened it."""
+
+    async def savings(self, days: int) -> dict[str, Any]: ...
+
 
 class PostgresAdminStore:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
@@ -267,6 +280,25 @@ class PostgresAdminStore:
         ]
         detail["calls"] = [_clean(call) for call in calls]
         return detail
+
+    async def overview(self) -> dict[str, Any]:
+        async with self._sessions() as session:
+            return await reports.overview(session)
+
+    async def users(self, query: str = "", limit: int = 200) -> list[dict[str, Any]]:
+        async with self._sessions() as session:
+            return await reports.users(session, query, limit)
+
+    async def user_usage(
+        self, student_id: uuid.UUID, viewer_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        # One transaction: if the view can't be logged, the usage isn't returned.
+        async with self._sessions.begin() as session:
+            return await reports.user_usage(session, student_id, viewer_id)
+
+    async def savings(self, days: int) -> dict[str, Any]:
+        async with self._sessions() as session:
+            return await reports.savings(session, days)
 
     async def model_call_summary(self, days: int) -> dict[str, Any]:
         params = {"days": days}
