@@ -149,7 +149,7 @@ def build_owl_agent(
     return create_deep_agent(
         model=get_model(
             ModelTier.LARGE if is_composite else ModelTier.SMALL,
-            component="orchestrator",
+            component="orchestrator:composite" if is_composite else "orchestrator",
             max_tokens=_ORCHESTRATOR_MAX_TOKENS,
         ),
         tools=[get_due_topics, search_memory],

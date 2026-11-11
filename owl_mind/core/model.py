@@ -14,11 +14,36 @@ class ModelTier(StrEnum):
     LARGE = "large"
 
 
-_MODEL_IDS = {
-    ModelTier.SMALL: "deepseek-flash",
-    # TODO: LARGE needs a better model than Flash. It uses Flash for now to limit cost.
-    ModelTier.LARGE: "deepseek-flash",
+# Which tier each component uses. get_chat_model refuses any other, so a call can't drift to a
+# costlier or weaker model unnoticed. An "agent:" component is any tutor.
+COMPONENT_TIERS: dict[str, ModelTier] = {
+    "intent": ModelTier.SMALL,
+    "intent:layer3": ModelTier.LARGE,
+    "orchestrator": ModelTier.SMALL,
+    "orchestrator:composite": ModelTier.LARGE,
+    "agent:": ModelTier.SMALL,
+    "summarization": ModelTier.SMALL,
+    "integrity_reviewer": ModelTier.SMALL,
+    "memory:write": ModelTier.SMALL,
+    "materials:topics": ModelTier.SMALL,
+    "handoff:improve": ModelTier.SMALL,
+    # Evaluation only: the judge of the adversarial set.
+    "integrity_judge": ModelTier.LARGE,
 }
+
+
+def tier_for(component: str) -> ModelTier:
+    key = "agent:" if component.startswith("agent:") else component
+    try:
+        return COMPONENT_TIERS[key]
+    except KeyError:
+        raise ValueError(f"No tier is set for component {component!r}") from None
+
+
+def _model_ids() -> dict[ModelTier, str]:
+    # LARGE stays Flash until the owner approves a model from the M3-F comparison.
+    return {ModelTier.SMALL: "deepseek-flash", ModelTier.LARGE: get_settings().large_model}
+
 
 # Thinking is on by default at DeepSeek, so every model must turn it off explicitly (Q2).
 _THINKING_OFF = {"thinking": {"type": "disabled"}}
@@ -29,10 +54,13 @@ def get_chat_model(
 ) -> BaseChatModel:
     """Build a chat model. component names who spends the tokens in ops.model_calls."""
     try:
-        model_id = _MODEL_IDS[ModelTier(tier)]
+        tier = ModelTier(tier)
     except ValueError:
         known = ", ".join(ModelTier)
         raise ValueError(f"Unknown model tier {tier!r}. Known tiers: {known}") from None
+    if tier is not tier_for(component):
+        raise ValueError(f"{component} uses the {tier_for(component).value} tier, not {tier.value}")
+    model_id = _model_ids()[tier]
 
     settings = get_settings()
     if settings.deepseek_api_key is None:

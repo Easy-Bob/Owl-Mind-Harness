@@ -277,9 +277,9 @@ def test_every_agent_sees_the_students_profile_in_its_context_block():
 
     invoke(run, TaskKind.LEARN, [Subagent.CONCEPT_TUTOR])
 
-    system = run.fake.requests[0]["messages"][0]["content"]
-    system = system if isinstance(system, str) else json.dumps(system)
-    assert "- This student: struggles with False positives; handles Hash functions well" in system
+    block = run.fake.requests[0]["messages"][-1]["content"]
+    block = block if isinstance(block, str) else json.dumps(block)
+    assert "- This student: struggles with False positives; handles Hash functions well" in block
 
 
 def test_the_orchestrator_can_search_past_sessions():

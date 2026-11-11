@@ -24,6 +24,8 @@ from owl_mind.services.memory import Memory, profile_line
 logger = logging.getLogger(__name__)
 
 MAX_TASK_CALLS = 3
+# Each tutor once, plus one retry with a clearer task (M3-F).
+MAX_CALLS_PER_TUTOR = 2
 DEFAULT_ARGUMENT_CHARS = 2000
 # Longer limits where a tool needs room, such as a student's code. Shorter where a long value
 # could only be a way to stuff text into a search.
@@ -201,6 +203,12 @@ class FanOutMiddleware(AgentMiddleware):
                 request,
                 f"This request has used its {self.maximum} tutor calls. Answer with what you have.",
             )
+        if self.called.get(tutor, 0) >= MAX_CALLS_PER_TUTOR:
+            return _refuse(
+                request,
+                f"{tutor} was already asked twice. Answer with what you have, and tell the "
+                "student what's missing.",
+            )
         waiting = sorted(t for t in self.allowed if t != tutor and not self.called.get(t))
         if self.maximum - self.calls - 1 < len(waiting):
             return _refuse(
@@ -222,10 +230,11 @@ class FanOutMiddleware(AgentMiddleware):
 
 
 class ContextMiddleware(AgentMiddleware):
-    """Adds facts about the turn, written by code, after the agent's fixed prompt.
+    """Adds facts about the turn, written by code, as the last message of each request.
 
-    It never holds student text. It changes from turn to turn, so it goes after the part of the
-    prompt that stays the same and can be cached.
+    It never holds student text. It changes from turn to turn, so it goes after everything that
+    stays the same: the system prompt, the tools, the skills list and the chat so far. DeepSeek
+    then bills that whole beginning at its cache price (M3-F).
     """
 
     def __init__(
@@ -264,15 +273,9 @@ class ContextMiddleware(AgentMiddleware):
             return None
 
     def _with_block(self, request: ModelRequest, about: str | None = None) -> ModelRequest:
-        block = self.block(request, about)
-        current = request.system_message
-        if current is None:
-            return request.override(system_message=SystemMessage(block))
-        if isinstance(current.content, str):
-            content: Any = f"{current.content}\n\n{block}"
-        else:
-            content = [*current.content, {"type": "text", "text": f"\n\n{block}"}]
-        return request.override(system_message=SystemMessage(content))
+        # Only in the request: the block is never saved in the chat's history.
+        block = SystemMessage(self.block(request, about))
+        return request.override(messages=[*request.messages, block])
 
     def wrap_model_call(self, request: ModelRequest, handler: Callable) -> ModelResponse:
         return handler(self._with_block(request))

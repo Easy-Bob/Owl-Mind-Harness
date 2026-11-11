@@ -29,20 +29,51 @@ def lookup_code(name: str) -> str:
     return f"code-{name}"
 
 
+# A real component of each tier, since the door checks every component against its table.
+ON = {ModelTier.SMALL: "intent", ModelTier.LARGE: "intent:layer3"}
+
+
 def test_tiers_map_to_deepseek_model_ids():
-    assert get_chat_model(ModelTier.SMALL, component="test").model_name == "deepseek-flash"
-    # LARGE uses Flash until a better model is chosen. See the TODO in core/model.py.
-    assert get_chat_model("large", component="test").model_name == "deepseek-flash"
+    assert get_chat_model(ModelTier.SMALL, component="intent").model_name == "deepseek-flash"
+    # LARGE stays Flash until the owner approves another model (M3-F).
+    assert get_chat_model("large", component="intent:layer3").model_name == "deepseek-flash"
+
+
+def test_the_large_model_comes_from_its_setting(monkeypatch):
+    monkeypatch.setenv("LARGE_MODEL", "deepseek-v4-pro")
+    get_settings.cache_clear()
+
+    assert get_chat_model("large", component="orchestrator:composite").model_name == (
+        "deepseek-v4-pro"
+    )
+    assert get_chat_model("small", component="orchestrator").model_name == "deepseek-flash"
+
+
+def test_a_component_calling_another_tier_is_refused():
+    with pytest.raises(ValueError, match="orchestrator uses the small tier, not large"):
+        get_chat_model("large", component="orchestrator")
+    with pytest.raises(ValueError, match="No tier is set"):
+        get_chat_model("small", component="made-up")
+
+
+def test_every_tutor_is_small_and_the_table_names_every_component_in_use():
+    from owl_mind.core.model import COMPONENT_TIERS, tier_for
+
+    assert tier_for("agent:concept_tutor") is ModelTier.SMALL
+    assert set(COMPONENT_TIERS) >= {
+        "intent", "orchestrator", "orchestrator:composite", "summarization",
+        "integrity_reviewer", "memory:write", "materials:topics", "handoff:improve",
+    }  # fmt: skip
 
 
 def test_every_tier_connects_to_the_configured_base_url():
     for tier in ModelTier:
-        assert get_chat_model(tier, component="test").api_base == "https://api.deepseek.com"
+        assert get_chat_model(tier, component=ON[tier]).api_base == "https://api.deepseek.com"
 
 
 def test_unknown_tier_is_named_in_the_error():
     with pytest.raises(ValueError, match="'huge'.*small, large"):
-        get_chat_model("huge", component="test")
+        get_chat_model("huge", component="intent")
 
 
 def test_missing_key_gives_a_clear_error(monkeypatch):
@@ -50,17 +81,17 @@ def test_missing_key_gives_a_clear_error(monkeypatch):
     get_settings.cache_clear()
 
     with pytest.raises(ConfigError, match="DEEPSEEK_API_KEY"):
-        get_chat_model(ModelTier.SMALL, component="test")
+        get_chat_model(ModelTier.SMALL, component="intent")
 
 
 def test_api_key_is_hidden_when_printed():
-    assert "not-a-real-key" not in repr(get_chat_model(ModelTier.SMALL, component="test"))
+    assert "not-a-real-key" not in repr(get_chat_model(ModelTier.SMALL, component="intent"))
 
 
 @pytest.mark.parametrize("tier", list(ModelTier))
 def test_request_turns_thinking_off(tier):
     fake = FakeDeepSeek([{"role": "assistant", "content": "hi"}])
-    model = get_chat_model(tier, component="test", max_tokens=50)
+    model = get_chat_model(tier, component=ON[tier], max_tokens=50)
     fake.attach(model)
 
     model.invoke([HumanMessage("hello")])
@@ -74,7 +105,7 @@ def test_request_turns_thinking_off(tier):
 
 def test_request_keeps_thinking_off_with_tools_bound():
     fake = FakeDeepSeek([{"role": "assistant", "content": "hi"}])
-    model = get_chat_model(ModelTier.SMALL, component="test")
+    model = get_chat_model(ModelTier.SMALL, component="intent")
     fake.attach(model)
 
     model.bind_tools([lookup_code]).invoke([HumanMessage("hello")])
@@ -86,7 +117,7 @@ def test_request_keeps_thinking_off_with_tools_bound():
 def test_reasoning_tokens_can_be_read_from_usage():
     usage = dict(USAGE, completion_tokens_details={"reasoning_tokens": 3})
     fake = FakeDeepSeek([{"role": "assistant", "content": "hi"}], usage=usage)
-    model = get_chat_model(ModelTier.SMALL, component="test")
+    model = get_chat_model(ModelTier.SMALL, component="intent")
     fake.attach(model)
 
     message = model.invoke([HumanMessage("hello")])
@@ -110,7 +141,7 @@ def test_deep_agent_tool_loop_with_two_tool_calls():
             {"role": "assistant", "content": "code-alpha and code-beta"},
         ]
     )
-    model = get_chat_model(ModelTier.SMALL, component="test")
+    model = get_chat_model(ModelTier.SMALL, component="intent")
     fake.attach(model)
     agent = create_deep_agent(model=model, tools=[lookup_code])
 

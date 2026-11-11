@@ -33,7 +33,7 @@ def small_model():
             pytest.skip("DEEPSEEK_API_KEY is not set")
     except ConfigError as exc:
         pytest.skip(str(exc))
-    return get_chat_model(ModelTier.SMALL, component="test:live", max_tokens=300)
+    return get_chat_model(ModelTier.SMALL, component="intent", max_tokens=300)
 
 
 def test_tool_loop_completes_with_no_reasoning_tokens(small_model):

@@ -50,6 +50,7 @@ export type GroupRow = {
   output_tokens: number | null;
   cost_usd: number | null;
   unknown_usage: number;
+  cache_hit_rate: number | null;
 };
 
 export type ModelCallSummary = {
