@@ -1,0 +1,11 @@
+apiVersion: 1
+
+# The dashboards are files in ops/grafana/dashboards (M4-E), so they're versioned with the code.
+providers:
+  - name: owl-mind
+    folder: Owl Mind
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

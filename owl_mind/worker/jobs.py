@@ -1,6 +1,7 @@
 """The background jobs, run by workers under a lease (M4-B), or in the API with no workers."""
 
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
@@ -40,7 +41,15 @@ async def resume_answered(services: Services) -> int:
         await services.approvals.set_resume_run(approval.id, run_id)
         resume = {"approved": approval.status == "approved"}
         await services.queue.enqueue(
-            RunRequest(run_id, approval.thread_id, student, "", resume=resume, setup=approval.setup)
+            RunRequest(
+                run_id,
+                approval.thread_id,
+                student,
+                "",
+                resume=resume,
+                setup=approval.setup,
+                queued_at=time.time(),
+            )
         )
         started += 1
     if started:

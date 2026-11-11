@@ -53,6 +53,7 @@ services:
       - "127.0.0.1:3002:3000"
     volumes:
       - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     depends_on:
       - prometheus

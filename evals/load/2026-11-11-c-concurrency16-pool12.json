@@ -1,0 +1,73 @@
+{
+  "settings": {
+    "api": "http://127.0.0.1:8020",
+    "invite": "load-test",
+    "levels": "5,10,20,40",
+    "seconds": 150,
+    "workers": 2,
+    "label": "c-concurrency16-pool12 workers=2 concurrency=16 pool=12 delay=800",
+    "out": "evals/load/2026-11-11-c-concurrency16-pool12.json"
+  },
+  "levels": [
+    {
+      "students": 5,
+      "seconds": 154,
+      "turns": 180,
+      "completed": 180,
+      "failed": 0,
+      "errors": 0,
+      "error_kinds": [],
+      "turns_per_minute": 70.2,
+      "turn_seconds_p50": 4.26,
+      "turn_seconds_p95": 4.35,
+      "first_text_p95": 4.31,
+      "queue_wait_mean": 0.005,
+      "turn_seconds_mean": 4.26
+    },
+    {
+      "students": 10,
+      "seconds": 154,
+      "turns": 360,
+      "completed": 360,
+      "failed": 0,
+      "errors": 0,
+      "error_kinds": [],
+      "turns_per_minute": 140.5,
+      "turn_seconds_p50": 4.24,
+      "turn_seconds_p95": 4.43,
+      "first_text_p95": 4.37,
+      "queue_wait_mean": 0.004,
+      "turn_seconds_mean": 4.25
+    },
+    {
+      "students": 20,
+      "seconds": 154,
+      "turns": 720,
+      "completed": 720,
+      "failed": 0,
+      "errors": 0,
+      "error_kinds": [],
+      "turns_per_minute": 280.6,
+      "turn_seconds_p50": 4.23,
+      "turn_seconds_p95": 4.4,
+      "first_text_p95": 4.38,
+      "queue_wait_mean": 0.003,
+      "turn_seconds_mean": 4.24
+    },
+    {
+      "students": 40,
+      "seconds": 157,
+      "turns": 1158,
+      "completed": 1158,
+      "failed": 0,
+      "errors": 0,
+      "error_kinds": [],
+      "turns_per_minute": 441.2,
+      "turn_seconds_p50": 4.45,
+      "turn_seconds_p95": 8.04,
+      "first_text_p95": 8.02,
+      "queue_wait_mean": 1.039,
+      "turn_seconds_mean": 5.28
+    }
+  ]
+}

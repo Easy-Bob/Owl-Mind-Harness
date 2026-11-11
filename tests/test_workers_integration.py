@@ -100,3 +100,44 @@ def test_a_job_lease_has_one_holder_until_it_lapses():
         return holds
 
     assert asyncio.run(with_queue(body)) == [True, False, True, True]
+
+
+def test_a_worker_reports_its_heartbeat_the_queue_depth_and_each_jobs_outcome():
+    from owl_mind.core import metrics
+    from owl_mind.worker.runs import HEARTBEATS, JOB_STATUS, heartbeat, job_loop
+
+    world, _ = queued_world()
+    name = f"test-{uuid.uuid4().hex[:6]}"
+
+    async def body(queue, client):
+        for _ in range(3):
+            thread = await world.runs.create_thread(uuid.uuid4(), "t")
+            await queue.enqueue(RunRequest(await world.runs.create_run(thread.id), thread.id,
+                                           uuid.uuid4(), "hi"))  # fmt: skip
+        await queue.next("w1", block_ms=100)  # One read and not yet acknowledged.
+        beat = asyncio.create_task(heartbeat(queue, name))
+
+        async def fails():
+            raise RuntimeError("job broke")
+
+        lease = JobLease(client, f"{name}-job", name, 5000)
+        jobs = [
+            asyncio.create_task(job_loop(lease, 60, lambda: asyncio.sleep(0), f"{name}-ok")),
+            asyncio.create_task(
+                job_loop(JobLease(client, f"{name}-bad", name, 5000), 60, fails, f"{name}-bad")
+            ),  # fmt: skip
+        ]
+        await asyncio.sleep(0.3)
+        for task in (beat, *jobs):
+            task.cancel()
+        beats = await client.hget(HEARTBEATS, name)
+        status = await client.hgetall(JOB_STATUS)
+        await client.hdel(HEARTBEATS, name)
+        await client.delete(f"lease:{name}-job", f"lease:{name}-bad")
+        await client.hdel(JOB_STATUS, f"{name}-ok:success", f"{name}-bad:failure")
+        return beats, {k.decode() for k in status}
+
+    beats, status = asyncio.run(with_queue(body))
+    assert beats is not None
+    assert (metrics.QUEUE_LAG._value.get(), metrics.QUEUE_PENDING._value.get()) == (2, 1)
+    assert {f"{name}-ok:success", f"{name}-bad:failure"} <= status

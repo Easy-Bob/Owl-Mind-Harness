@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import socket
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
@@ -22,6 +23,8 @@ from typing import Any
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
+from owl_mind.core import metrics
+from owl_mind.core.config import get_settings
 from owl_mind.core.runtime import RunRequest, Services, execute_run
 from owl_mind.services.run_store import FINISHED, WAITING
 
@@ -35,6 +38,13 @@ GROUP = "runners"
 CLAIM_MS = 10 * 60 * 1000
 MAX_DELIVERIES = 3
 INTERRUPTED = "This answer was interrupted. Please ask again."
+# Read by the Admin Reliability page (M4-F): when each worker last reported, and each job's last
+# success and failure. Hashes keyed by worker name and by job.
+HEARTBEATS = "workers:heartbeat"
+JOB_STATUS = "jobs:status"
+HEARTBEAT_SECONDS = 15
+# Old entries are trimmed so the stream doesn't grow forever; far more than can be waiting.
+_STREAM_MAX = 100_000
 # A run taken over later than this is failed rather than resumed.
 RESUME_WITHIN = timedelta(hours=1)
 
@@ -65,7 +75,7 @@ class RedisRunQueue:
                 raise
 
     async def enqueue(self, request: RunRequest) -> None:
-        await self.client.xadd(STREAM, {"run": _encode(request)})
+        await self.client.xadd(STREAM, {"run": _encode(request)}, maxlen=_STREAM_MAX)
 
     async def next(self, consumer: str, block_ms: int, claim_ms: int = CLAIM_MS):
         """The next message for this worker: an abandoned one first, then a new one."""
@@ -92,6 +102,14 @@ class RedisRunQueue:
         await self.client.xadd(DEAD, {"run": raw, "deliveries": str(deliveries)}, maxlen=10_000)
         await self.ack(message_id)
 
+    async def depth(self) -> tuple[int, int]:
+        """Runs not yet read by any worker, and runs read but not yet acknowledged."""
+        for group in await self.client.xinfo_groups(STREAM):
+            name = group["name"].decode() if isinstance(group["name"], bytes) else group["name"]
+            if name == GROUP:
+                return int(group.get("lag") or 0), int(group.get("pending") or 0)
+        return 0, 0
+
 
 async def fail_run(services: Services, run_id: uuid.UUID, message: str) -> None:
     await services.runs.set_run_status(run_id, "failed")
@@ -115,13 +133,17 @@ async def handle(
     except ValueError, TypeError, KeyError:
         # A malformed entry can never succeed, so it goes straight to the dead letters.
         await queue.dead_letter(message_id, raw, 0)
+        metrics.DEAD_LETTERS.labels("malformed").inc()
         return "malformed"
     deliveries = await queue.deliveries(message_id)
     if deliveries > MAX_DELIVERIES:
         await queue.dead_letter(message_id, raw, deliveries)
         await fail_run(services, request.run_id, INTERRUPTED)
+        metrics.DEAD_LETTERS.labels("deliveries").inc()
         return "dead"
     status = await services.runs.status_of(request.run_id)
+    if status == "queued" and request.queued_at is not None:
+        metrics.QUEUE_WAIT.observe(max(0.0, time.time() - request.queued_at))
     if status in (*FINISHED, WAITING):
         await queue.ack(message_id)
         return "already done"
@@ -134,6 +156,7 @@ async def handle(
             await fail_run(services, request.run_id, INTERRUPTED)
             await queue.ack(message_id)
             return "interrupted"
+        metrics.TAKEOVERS.labels("resumed" if found.setup is not None else "restarted").inc()
         if found.setup is not None:
             # The intent step had finished: go on from the last checkpoint, with the same setup,
             # so the question isn't added twice and finished tutor calls aren't paid for again.
@@ -163,6 +186,14 @@ class JobLease:
         return False
 
 
+async def _job_status(client: Redis | None, name: str, outcome: str) -> None:
+    if client is not None:
+        try:
+            await client.hset(JOB_STATUS, f"{name}:{outcome}", str(time.time()))
+        except Exception as exc:
+            logger.warning("Job status not kept: %s", type(exc).__name__)
+
+
 async def job_loop(
     lease: JobLease, interval_s: float, job: Callable[[], Awaitable[Any]], name: str
 ) -> None:
@@ -170,9 +201,28 @@ async def job_loop(
         try:
             if await lease.hold():
                 await job()
+                metrics.JOB_RUNS.labels(name, "success").inc()
+                metrics.JOB_LAST_SUCCESS.labels(name).set_to_current_time()
+                await _job_status(lease.client, name, "success")
         except Exception as exc:
             logger.warning("%s job failed: %s", name, type(exc).__name__)
+            metrics.JOB_RUNS.labels(name, "failure").inc()
+            await _job_status(lease.client, name, "failure")
         await asyncio.sleep(interval_s)
+
+
+async def heartbeat(queue: RedisRunQueue, name: str) -> None:
+    """Report this worker as alive, and sample the queue's depth for the dashboards."""
+    while True:
+        metrics.WORKER_HEARTBEAT.set_to_current_time()
+        try:
+            await queue.client.hset(HEARTBEATS, name, str(time.time()))
+            lag, pending = await queue.depth()
+            metrics.QUEUE_LAG.set(lag)
+            metrics.QUEUE_PENDING.set(pending)
+        except Exception as exc:
+            logger.warning("Heartbeat not sent: %s", type(exc).__name__)
+        await asyncio.sleep(HEARTBEAT_SECONDS)
 
 
 async def consume(services: Services, queue: RedisRunQueue, consumer: str) -> None:
@@ -188,17 +238,25 @@ async def consume(services: Services, queue: RedisRunQueue, consumer: str) -> No
             await asyncio.sleep(1)
 
 
-async def serve(concurrency: int = 4) -> None:
+async def serve() -> None:
+    from prometheus_client import start_http_server
+
     from owl_mind.api.app import _production_services
     from owl_mind.worker.jobs import jobs
 
+    settings = get_settings()
     name = f"{socket.gethostname()}-{os.getpid()}"
+    if settings.worker_metrics_port:
+        # Each worker on a host needs its own port: set WORKER_METRICS_PORT per worker.
+        start_http_server(settings.worker_metrics_port)
     async with _production_services() as services:
         queue = services.queue
         await queue.ensure_group()
         tasks = [
-            asyncio.create_task(consume(services, queue, f"{name}-{n}")) for n in range(concurrency)
+            asyncio.create_task(consume(services, queue, f"{name}-{n}"))
+            for n in range(settings.worker_concurrency)
         ]
+        tasks.append(asyncio.create_task(heartbeat(queue, name)))
         for job_name, interval, job in jobs(services):
             lease = JobLease(queue.client, job_name, name, int(interval * 3 * 1000))
             tasks.append(asyncio.create_task(job_loop(lease, interval, job, job_name)))

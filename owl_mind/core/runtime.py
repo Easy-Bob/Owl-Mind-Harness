@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from langgraph.graph import START, StateGraph
 from langgraph.store.base import BaseStore
 from langgraph.types import Command
 
-from owl_mind.core import quiz_reuse, replies, telemetry
+from owl_mind.core import metrics, quiz_reuse, replies, telemetry
 from owl_mind.core.budget import BudgetExceeded, BudgetStop, RunMeter
 from owl_mind.core.config import get_settings
 from owl_mind.core.events import EventBus
@@ -74,6 +75,8 @@ class RunRequest:
     # Set when the run resumes a paused one: the student's decision and the paused run's setup.
     resume: dict[str, Any] | None = None
     setup: dict[str, Any] | None = None
+    # When the API queued it (Unix seconds), for the queue-wait metric (M4-E).
+    queued_at: float | None = None
     # Set when a worker takes over a run another worker left: the agent goes on from the
     # thread's last checkpoint with no new input, so the question isn't added twice (M4-C).
     from_checkpoint: bool = False
@@ -101,9 +104,12 @@ class _Emitter:
         self._services = services
         self._run_id = run_id
         self._count = 0
+        # The run's route and kind once the intent step has chosen them, for metric labels.
+        self.route, self.task_kind = "unknown", "none"
 
     async def __call__(self, kind: str, data: dict[str, Any]) -> None:
         self._count += 1
+        metrics.observe_event(kind, data)
         try:
             await self._services.events.publish(self._run_id, kind, data)
         except Exception as exc:
@@ -506,6 +512,9 @@ async def execute_run(services: Services, request: RunRequest) -> None:
         "callbacks": [meter],
     }
     waiting = False
+    started = time.monotonic()
+    metrics.RUNS_STARTED.inc()
+    metrics.RUNS_RUNNING.inc()
     try:
         await services.runs.set_run_status(request.run_id, "running")
         # What this turn spent before a takeover or an approval still counts.
@@ -526,6 +535,7 @@ async def execute_run(services: Services, request: RunRequest) -> None:
                 **{k: v for k, v in (request.setup or {}).items() if k == "paused_run"},
             }
         await services.runs.set_run_setup(request.run_id, result.route.value, _kind(result), setup)
+        emit.route, emit.task_kind = result.route.value, _kind(result) or "none"
         if result.route is Route.ORCHESTRATED:
             try:
                 if not await _reused_quiz(services, request, result, emit):
@@ -544,6 +554,7 @@ async def execute_run(services: Services, request: RunRequest) -> None:
         await _finish(services, request, "stopped", emit, "done", reason=reason)
     except asyncio.CancelledError:
         await services.runs.set_run_status(request.run_id, "failed")
+        _count_finish(emit, "failed", "cancelled")
         raise
     except Exception as exc:
         # Details stay in the log, because error text can hold a student's input.
@@ -552,6 +563,13 @@ async def execute_run(services: Services, request: RunRequest) -> None:
     else:
         status = WAITING if waiting else "completed"
         await _finish(services, request, status, emit, "done")
+    finally:
+        metrics.RUNS_RUNNING.dec()
+        metrics.RUN_SECONDS.labels(emit.route, emit.task_kind).observe(time.monotonic() - started)
+
+
+def _count_finish(emit: _Emitter, status: str, reason: str) -> None:
+    metrics.RUNS_FINISHED.labels(emit.route, emit.task_kind, status, reason).inc()
 
 
 async def _finish(
@@ -559,6 +577,7 @@ async def _finish(
 ) -> None:
     # Status first: a client that sees the last event may send its next message straight away.
     await services.runs.set_run_status(request.run_id, status)
+    _count_finish(emit, status, str(extra.get("reason") or ("error" if kind == "error" else "")))
     data = {"message": extra["message"]} if kind == "error" else {"status": status, **extra}
     await emit(kind, data)
 
