@@ -11,6 +11,9 @@ MAX_MESSAGE_CHARS = 200
 
 class MessageIn(BaseModel):
     message: str = Field(max_length=MAX_MESSAGE_CHARS)
+    # Made by the browser for each message it sends. A resend with the same ID, after a lost
+    # response or a double click, gets the run the first one started (M4-C).
+    client_message_id: uuid.UUID | None = None
 
 
 class RunStarted(BaseModel):

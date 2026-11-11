@@ -64,6 +64,13 @@ class Run(Base):
             unique=True,
             postgresql_where=text(_BUSY),
         ),
+        Index(
+            "ix_app_runs_client_message",
+            "student_id",
+            "client_message_id",
+            unique=True,
+            postgresql_where=text("client_message_id IS NOT NULL"),
+        ),
         # One at a time for a student too, so a second chat can't double their spending.
         Index(
             "ix_app_runs_one_active_per_student",
@@ -77,6 +84,10 @@ class Run(Base):
     thread_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("threads.id"), index=True)
     # The thread's owner, copied here so the index above can see it.
     student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("students.id"))
+    # Sent by the web with each message, so a repeat returns this run (M4-C).
+    client_message_id: Mapped[uuid.UUID | None] = mapped_column()
+    # The task kind and tutors, so a worker taking the run over can resume it.
+    setup: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(20))
     route: Mapped[str | None] = mapped_column(String(20))
     task_kind: Mapped[str | None] = mapped_column(String(20))
@@ -271,3 +282,16 @@ class MemoryWrite(Base):
     input_hash: Mapped[str | None] = mapped_column(Text)
     written_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class QuizPost(Base):
+    """A posted quiz, kept so a resumed run still shows it."""
+
+    __tablename__ = "quiz_posts"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), index=True)
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("students.id"))
+    topic: Mapped[str] = mapped_column(Text)
+    quiz: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

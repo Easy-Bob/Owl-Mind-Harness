@@ -196,6 +196,13 @@ export function ChatPage({ user, onLoggedOut }: Props) {
       setMessages(await api.history(threadId));
     } catch (caught) {
       handleFailure(caught);
+      return;
+    }
+    // An answer still being written, as after a reload: follow it to the end.
+    const active = await api.activeRun(threadId).catch(() => null);
+    if (active) {
+      sending.current = true;
+      follow(active.run_id, threadId);
     }
   }
 

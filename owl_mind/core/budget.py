@@ -32,6 +32,8 @@ _UNKNOWN_MODEL_PRICE = max(_PRICES.values())
 # Counted for a call whose cap isn't known, such as one that set no max_tokens.
 DEFAULT_OUTPUT_CAP = 4000
 _COUNTER_TTL_SECONDS = 2 * 24 * 3600
+# A run's own counter only matters while the run can still be resumed (M4-C).
+_RUN_TTL_SECONDS = 24 * 3600
 
 WIND_DOWN_SHARE = 0.7
 FINAL_SHARE = 0.9
@@ -81,6 +83,10 @@ def _global_key(day: date) -> str:
     return f"budget:global:{day.isoformat()}"
 
 
+def _run_key(run_id: uuid.UUID) -> str:
+    return f"budget:run:{run_id}"
+
+
 class RedisBudgetLedger:
     """Daily counters in Redis. INCRBY is atomic, so two runs at once can't lose a charge."""
 
@@ -101,6 +107,15 @@ class RedisBudgetLedger:
             pipe.expire(_global_key(day), _COUNTER_TTL_SECONDS)
             await pipe.execute()
 
+    async def charge_run(self, run_id: uuid.UUID, tokens: int) -> None:
+        async with self._client.pipeline(transaction=False) as pipe:
+            pipe.incrby(_run_key(run_id), tokens)
+            pipe.expire(_run_key(run_id), _RUN_TTL_SECONDS)
+            await pipe.execute()
+
+    async def run_spent(self, run_id: uuid.UUID) -> int:
+        return int(await self._client.get(_run_key(run_id)) or 0)
+
 
 class InMemoryBudgetLedger:
     """The same behavior for unit tests. Set down to make every read and write fail."""
@@ -108,6 +123,7 @@ class InMemoryBudgetLedger:
     def __init__(self) -> None:
         self.students: dict[tuple[uuid.UUID, date], int] = {}
         self.totals: dict[date, int] = {}
+        self.runs: dict[uuid.UUID, int] = {}
         self.down = False
 
     async def spent(self, student_id: uuid.UUID, day: date) -> Spend:
@@ -122,6 +138,16 @@ class InMemoryBudgetLedger:
             raise ConnectionError("ledger down")
         self.students[(student_id, day)] = self.students.get((student_id, day), 0) + tokens
         self.totals[day] = self.totals.get(day, 0) + cost_micro_usd
+
+    async def charge_run(self, run_id: uuid.UUID, tokens: int) -> None:
+        if self.down:
+            raise ConnectionError("ledger down")
+        self.runs[run_id] = self.runs.get(run_id, 0) + tokens
+
+    async def run_spent(self, run_id: uuid.UUID) -> int:
+        if self.down:
+            raise ConnectionError("ledger down")
+        return self.runs.get(run_id, 0)
 
 
 def budget_step(share: float) -> str | None:
@@ -146,9 +172,12 @@ class RunMeter(AsyncCallbackHandler):
         student_id: uuid.UUID,
         run_tokens: int = 0,
         record: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+        run_id: uuid.UUID | None = None,
     ) -> None:
         settings = get_settings()
         self.ledger = ledger
+        # Each run's spend is kept too, so a run another worker resumes keeps its count.
+        self.run_id = run_id
         self.student_id = student_id
         # Set once the intent step has chosen the kind of request. Until then only the daily
         # budgets apply.
@@ -196,6 +225,25 @@ class RunMeter(AsyncCallbackHandler):
             # A charge that may not have counted stops the run at its next check.
             self._broken = True
             logger.warning("Budget charge failed: %s", type(exc).__name__)
+            return
+        if self.run_id is not None and hasattr(self.ledger, "charge_run"):
+            try:
+                await self.ledger.charge_run(self.run_id, tokens)
+            except Exception as exc:
+                logger.warning("Run spend not kept: %s", type(exc).__name__)
+
+    async def restore(self, *run_ids: uuid.UUID | None) -> None:
+        """Start from what these runs already spent: a resumed run doesn't get a fresh budget."""
+        if self.ledger is None or not hasattr(self.ledger, "run_spent"):
+            return
+        for run_id in run_ids:
+            if run_id is not None:
+                try:
+                    self.used += await self.ledger.run_spent(run_id)
+                except Exception as exc:
+                    # Unreadable means unknown, and unknown stops the run at its next check.
+                    self._broken = True
+                    logger.warning("Run spend unreadable: %s", type(exc).__name__)
 
     async def daily(self) -> None:
         """Raise unless the student and the system both have budget left today."""

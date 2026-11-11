@@ -14,6 +14,8 @@ class RunContext:
     student_id: uuid.UUID
     store: StudyStore
     today: date
+    # The run, so what a tool posts can be found again if the run resumes (M4-C).
+    run_id: uuid.UUID | None = None
     # MaterialsSearch, or None where there are no materials, such as in some tests.
     search: Any = None
     # Records a metadata-only event on the run, for the Admin timeline. Never fails a tool.

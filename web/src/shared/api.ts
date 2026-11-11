@@ -110,6 +110,20 @@ export async function request<T>(path: string, body?: unknown, method?: string):
   return response.status === 204 ? (undefined as T) : response.json();
 }
 
+/** Sends a new message with an ID made here. If the response is lost, it's sent once more
+ * with the same ID, and the server returns the run the first copy started instead of a second. */
+async function sendNew(path: string, message: string): Promise<RunStarted> {
+  const body = { message, client_message_id: crypto.randomUUID() };
+  try {
+    return await request<RunStarted>(path, body);
+  } catch (caught) {
+    if (caught instanceof ApiError && caught.status === 0) {
+      return request<RunStarted>(path, body);
+    }
+    throw caught;
+  }
+}
+
 export const api = {
   me: () => request<User>("/auth/me"),
   notice: () => request<{ notice: string }>("/auth/notice"),
@@ -120,9 +134,10 @@ export const api = {
   logout: () => request<void>("/auth/logout", {}),
   threads: () => request<Thread[]>("/threads"),
   history: (threadId: string) => request<HistoryMessage[]>(`/threads/${threadId}/messages`),
-  startThread: (message: string) => request<RunStarted>("/threads", { message }),
+  startThread: (message: string) => sendNew("/threads", message),
   sendMessage: (threadId: string, message: string) =>
-    request<RunStarted>(`/threads/${threadId}/messages`, { message }),
+    sendNew(`/threads/${threadId}/messages`, message),
+  activeRun: (threadId: string) => request<RunStarted>(`/threads/${threadId}/active`),
   handoffs: (threadId: string) =>
     request<Handoff[]>(`/handoffs?thread_id=${encodeURIComponent(threadId)}`),
   approveHandoff: (id: string, title: string, body: string, graded: boolean) =>

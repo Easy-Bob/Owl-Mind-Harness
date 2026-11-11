@@ -189,11 +189,32 @@ class FanOutMiddleware(AgentMiddleware):
         self.maximum = maximum
         self.calls = 0
         self.called: dict[str, int] = {}
+        self._seeded = False
+
+    def _seed(self, messages: Sequence[Any]) -> None:
+        """Count the calls this turn already finished, for a run resumed from its checkpoint
+        (M4-C). A fresh turn has none, so this changes nothing there."""
+        self._seeded = True
+        start = max((i for i, m in enumerate(messages) if isinstance(m, HumanMessage)), default=-1)
+        asked: dict[str, str] = {}
+        for message in messages[start + 1 :]:
+            if isinstance(message, AIMessage):
+                for call in message.tool_calls:
+                    if call["name"] == "task":
+                        asked[call["id"]] = (call.get("args") or {}).get("subagent_type")
+            elif isinstance(message, ToolMessage) and message.status != "error":
+                tutor = asked.get(message.tool_call_id)
+                if tutor is not None:
+                    self.calls += 1
+                    self.called[tutor] = self.called.get(tutor, 0) + 1
 
     def _check(self, request: ToolCallRequest) -> ToolMessage | None:
         call = request.tool_call
         if call["name"] != "task":
             return None
+        if not self._seeded:
+            state = request.state if isinstance(request.state, dict) else {}
+            self._seed(state.get("messages") or [])
         tutor = (call.get("args") or {}).get("subagent_type")
         if tutor not in self.allowed:
             allowed = ", ".join(sorted(self.allowed)) or "none"
