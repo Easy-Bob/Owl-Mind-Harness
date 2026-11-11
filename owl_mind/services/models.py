@@ -40,6 +40,8 @@ class Student(Base):
     password_hash: Mapped[str | None] = mapped_column(String(255))
     notice_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # The invite code's hash, for turning live agent runs on per cohort (M4-G).
+    invite_hash: Mapped[str | None] = mapped_column(String(64))
 
 
 class Thread(Base):

@@ -42,6 +42,7 @@ from owl_mind.services.admin_store import PostgresAdminStore
 from owl_mind.services.approvals import PostgresApprovalStore
 from owl_mind.services.memory import Memory, MemoryWriter, PostgresMemoryLog
 from owl_mind.services.models import sqlalchemy_url
+from owl_mind.services.retention import Periods, Retention
 from owl_mind.services.run_events import RunEventLog
 from owl_mind.services.run_store import PostgresRunStore
 from owl_mind.services.study_store import PostgresStudyStore
@@ -154,6 +155,12 @@ async def _production_services() -> AsyncIterator[Services]:
                 memory=memory,
                 # Runs go to workers (M4-B): uv run python -m owl_mind.worker.runs
                 queue=RedisRunQueue(client),
+                retention=Retention(
+                    sessions,
+                    persistence.checkpointer,
+                    persistence.store,
+                    Periods(settings.retention_chat_days, settings.retention_log_days),
+                ),
                 # Only with a model key: without one, the button is hidden.
                 improver=Improver(handoffs.store, get_chat_model, events)
                 if settings.deepseek_api_key

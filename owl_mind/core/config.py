@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     direct_single_tutor: bool = True
     # Kept: "Quiz me on X" shows a quiz already made from the same notes, with no agent run.
     quiz_reuse: bool = True
+    # Who gets live agent answers (M4-G): emails, "@domain" and "invite:<code>", comma-separated.
+    # Empty means everyone. See services/cohort.py.
+    agent_cohort: SecretStr = SecretStr("")
+    # Retention (M4-G): idle chats, and the access log and model calls, are deleted after these.
+    retention_chat_days: int = 180
+    retention_log_days: int = 400
     # Workers (M4-B, tuned in M4-E): runs at once per worker process, and its /metrics port
     # (0 for none). Each worker on one host needs its own port.
     # 16 from the load test: 4 capped two workers at about 111 turns a minute (evals/load).

@@ -1,0 +1,199 @@
+apiVersion: 1
+
+# Alerts on the M4-E metrics (M4-G). Each names its runbook in ops/runbooks.
+# Grafana sends them to its default contact point: set one up as in ops/runbooks/alerts.md.
+groups:
+  - orgId: 1
+    name: owl-mind
+    folder: Owl Mind
+    interval: 1m
+    rules:
+      - uid: owl-error-rate
+        title: More than 5% of runs failing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 'sum(rate(owl_runs_finished_total{status="failed"}[10m])) / clamp_min(sum(rate(owl_runs_finished_total[10m])), 1e-9)'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0.05]}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: Over 5% of runs failed in the last 10 minutes.
+          runbook_url: https://github.com/Easy-Bob/Owl-Mind-Harness/blob/main/ops/runbooks/error-rate.md
+        labels:
+          service: owl-mind
+      - uid: owl-global-budget
+        title: Global daily budget past 80%
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 'max(owl_budget_global_share)'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0.8]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: Today's spend has passed 80% of GLOBAL_DAILY_USD.
+          runbook_url: https://github.com/Easy-Bob/Owl-Mind-Harness/blob/main/ops/runbooks/global-budget.md
+        labels:
+          service: owl-mind
+      - uid: owl-worker-silent
+        title: A worker stopped reporting
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 'time() - max(owl_worker_heartbeat_seconds)'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [60]}
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: No worker has reported for over a minute.
+          runbook_url: https://github.com/Easy-Bob/Owl-Mind-Harness/blob/main/ops/runbooks/worker-silent.md
+        labels:
+          service: owl-mind
+      - uid: owl-job-stale
+        title: A background job hasn't succeeded
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 'max(time() - owl_job_last_success_seconds{job_name!="retention"})'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [1800]}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: A background job (other than retention) has not succeeded for 30 minutes.
+          runbook_url: https://github.com/Easy-Bob/Owl-Mind-Harness/blob/main/ops/runbooks/job-stale.md
+        labels:
+          service: owl-mind
+      - uid: owl-retention-stale
+        title: Retention hasn't run for two days
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 'time() - max(owl_job_last_success_seconds{job_name="retention"})'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [172800]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: The nightly retention job has not succeeded for two days.
+          runbook_url: https://github.com/Easy-Bob/Owl-Mind-Harness/blob/main/ops/runbooks/job-stale.md
+        labels:
+          service: owl-mind
+      - uid: owl-dead-letters
+        title: Runs sent to the dead letters
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 'sum(increase(owl_dead_letters_total[15m]))'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: A run was given up on after repeated deliveries.
+          runbook_url: https://github.com/Easy-Bob/Owl-Mind-Harness/blob/main/ops/runbooks/dead-letters.md
+        labels:
+          service: owl-mind
+      - uid: owl-queue-backlog
+        title: Queue backing up
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 'max(owl_queue_lag)'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [20]}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: Over 20 runs have waited unread for 5 minutes.
+          runbook_url: https://github.com/Easy-Bob/Owl-Mind-Harness/blob/main/ops/runbooks/queue-backlog.md
+        labels:
+          service: owl-mind

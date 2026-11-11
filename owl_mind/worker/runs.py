@@ -24,6 +24,7 @@ from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
 from owl_mind.core import metrics
+from owl_mind.core.budget import RedisBudgetLedger
 from owl_mind.core.config import get_settings
 from owl_mind.core.runtime import RunRequest, Services, execute_run
 from owl_mind.services.run_store import FINISHED, WAITING
@@ -259,6 +260,11 @@ async def heartbeat(queue: RedisRunQueue, name: str) -> None:
             lag, pending = await queue.depth()
             metrics.QUEUE_LAG.set(lag)
             metrics.QUEUE_PENDING.set(pending)
+            spend = await RedisBudgetLedger(queue.client).spent(
+                uuid.UUID(int=0), datetime.now(UTC).date()
+            )
+            limit = get_settings().global_daily_usd * 1_000_000
+            metrics.BUDGET_GLOBAL_SHARE.set(spend.global_micro_usd / limit if limit else 0)
         except Exception as exc:
             logger.warning("Heartbeat not sent: %s", type(exc).__name__)
         await asyncio.sleep(HEARTBEAT_SECONDS)

@@ -73,6 +73,9 @@ class RunStore(Protocol):
     async def active_run(self, student_id: uuid.UUID, thread_id: uuid.UUID) -> RunInfo | None:
         """The chat's answer still being written, so a reopened chat can follow it."""
 
+    async def has_busy_run(self, student_id: uuid.UUID) -> bool:
+        """Any run of the student's not yet finished, including one waiting for approval."""
+
     async def delete_empty_thread(self, thread_id: uuid.UUID) -> None:
         """Remove a thread that never got a run, such as one refused for a run elsewhere."""
 
@@ -141,6 +144,12 @@ class InMemoryRunStore:
         if run is None:
             return None
         return Takeover(self.created[run_id], run.route, self.setups.get(run_id))
+
+    async def has_busy_run(self, student_id) -> bool:
+        return any(
+            self.threads[r.thread_id][0] == student_id and r.status in BUSY
+            for r in self.runs.values()
+        )
 
     async def active_run(self, student_id, thread_id) -> RunInfo | None:
         if await self.get_thread(student_id, thread_id) is None:
@@ -268,6 +277,11 @@ class PostgresRunStore:
         if row is None:
             return None
         return RunInfo(row.id, row.thread_id, row.status, row.route, row.task_kind)
+
+    async def has_busy_run(self, student_id) -> bool:
+        statement = select(Run.id).where(Run.student_id == student_id, Run.status.in_(BUSY))
+        async with self._sessions() as session:
+            return await session.scalar(statement.limit(1)) is not None
 
     async def active_run(self, student_id, thread_id) -> RunInfo | None:
         statement = select(Run).where(
