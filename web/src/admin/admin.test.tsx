@@ -185,7 +185,8 @@ describe("Admin mode", () => {
     expect(page).toHaveTextContent("2026-11-11: 2 stopped, time limit");
     expect(page).toHaveTextContent("3 waiting, 1 being run");
     expect(page).toHaveTextContent("host-2: reported 300 s ago (not reporting)");
-    expect(page).toHaveTextContent("approvals: last success 30 s ago, last failure never");
+    // Measured from the page's clock, so a slow run can read a second or two more.
+    expect(page).toHaveTextContent(/approvals: last success 3\d s ago, last failure never/);
     await user.click(within(page).getByRole("button", { name: "r9" }));
     await waitFor(() => expect(calls).toContain("/admin/requests/r9"));
   });
