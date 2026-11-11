@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     direct_single_tutor: bool = True
     # Kept: "Quiz me on X" shows a quiz already made from the same notes, with no agent run.
     quiz_reuse: bool = True
+    # Workers (M4-B, tuned in M4-E): runs at once per worker process, and its /metrics port
+    # (0 for none). Each worker on one host needs its own port.
+    worker_concurrency: int = 4
+    worker_metrics_port: int = 9101
+    # Database connections per process, for each pool (SQLAlchemy, the saver, the store).
+    db_pool_size: int = 5
     # The large tier's model. Changed only with the owner's approval of the M3-F comparison.
     large_model: Literal["deepseek-flash", "deepseek-v4-pro"] = "deepseek-flash"
     jwt_secret: SecretStr | None = None

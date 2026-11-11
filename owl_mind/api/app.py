@@ -95,7 +95,11 @@ async def _in_process_jobs(services: Services) -> None:
 async def _production_services() -> AsyncIterator[Services]:
     settings = get_settings()
     check_jwt_secret(settings)
-    engine = create_async_engine(sqlalchemy_url(settings.database_url))
+    engine = create_async_engine(
+        sqlalchemy_url(settings.database_url),
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_pool_size,
+    )
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     client = Redis.from_url(settings.redis_url, socket_timeout=_REDIS_TIMEOUT_SECONDS)
     embedder = FastEmbedEmbedder(settings.embedding_model, settings.embedding_cache_dir)

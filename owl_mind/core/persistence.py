@@ -14,6 +14,8 @@ from langgraph.store.postgres import AsyncPostgresStore
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from owl_mind.core.config import get_settings
+
 # The dimension of all-MiniLM-L6-v2, the embedding model chosen in Q14.
 EMBEDDING_DIMS = 384
 
@@ -27,9 +29,12 @@ class Persistence:
 def _pool(database_url: str, schema: str) -> AsyncConnectionPool:
     # The saver and store have no schema option, so search_path decides where their tables go.
     # public stays on the path because the pgvector extension lives there.
+    size = get_settings().db_pool_size
     return AsyncConnectionPool(
         database_url,
         open=False,
+        min_size=1,
+        max_size=size,
         kwargs={
             "autocommit": True,
             "prepare_threshold": 0,

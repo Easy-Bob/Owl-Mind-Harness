@@ -1,9 +1,11 @@
 """Chat routes. Every route needs a logged-in student, and only reaches their own data."""
 
 import asyncio
+import dataclasses
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
@@ -39,6 +41,7 @@ def _title(message: str) -> str:
 
 async def _start(http: Request, services: Services, run: RunRequest) -> None:
     if services.queue is not None:
+        run = dataclasses.replace(run, queued_at=time.time())
         # A worker runs it (M4-B), so a busy or restarting API never holds a run up.
         await services.queue.enqueue(run)
         return
