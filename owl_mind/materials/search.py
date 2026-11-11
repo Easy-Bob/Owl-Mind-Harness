@@ -136,6 +136,10 @@ class MaterialsSearch:
         self._embedder = embedder
         self._cache = cache
 
+    async def corpus_version(self) -> int:
+        """Raised by every import, so anything made from the notes can tell it's out of date."""
+        return await self._store.corpus_version()
+
     async def search(self, query: str, limit: int = 5) -> list[SearchResult]:
         results, _ = await self.search_with_stats(query, limit)
         return results

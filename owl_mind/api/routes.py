@@ -172,6 +172,16 @@ async def _event_stream(
         run = await services.runs.get_run(student, run_id)
         # The live stream can expire or be lost, so a finished run must still end the response.
         if run is None or run.status in (*FINISHED, WAITING):
+            # Events published between the empty read and this check are sent first; a fast
+            # run, such as a reused quiz, could otherwise end without its answer on screen.
+            try:
+                late = await services.events.read(run_id, after, 0)
+            except Exception:
+                late = []
+            for event_id, kind, data in late:
+                yield _sse(event_id, kind, data)
+                if kind in TERMINAL_KINDS:
+                    return
             status = run.status if run else "failed"
             yield _sse("0-0", "done", {"status": status})
             return

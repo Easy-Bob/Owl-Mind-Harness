@@ -23,7 +23,13 @@ from owl_mind.core.config import get_settings
 from owl_mind.core.integrity import IntegrityCheck, needs_check
 from owl_mind.core.intent.taxonomy import Subagent, TaskKind
 from owl_mind.core.limits import RUN_LIMITS
-from owl_mind.core.middleware import JoinAnswerMiddleware, ReportCheckMiddleware, turn_middleware
+from owl_mind.core.middleware import (
+    DelegateFirstMiddleware,
+    JoinAnswerMiddleware,
+    PostedQuizAnswerMiddleware,
+    ReportCheckMiddleware,
+    turn_middleware,
+)
 from owl_mind.core.model import ModelTier, get_chat_model
 from owl_mind.core.subagents import TUTORS
 from owl_mind.tools.context import RunContext
@@ -76,6 +82,15 @@ class BudgetedSummarization(SummarizationMiddleware):
 GetModel = Callable[..., BaseChatModel]
 
 
+def goes_direct(task_kind: TaskKind | None, subagents: Sequence[Subagent]) -> bool:
+    """A one-tutor turn that skips the orchestrator (M4-D experiment, off by default)."""
+    return (
+        get_settings().direct_single_tutor
+        and len(subagents) == 1
+        and task_kind is not TaskKind.COMPOSITE
+    )
+
+
 def build_owl_agent(
     task_kind: TaskKind,
     subagents: Sequence[Subagent],
@@ -92,10 +107,10 @@ def build_owl_agent(
     limit = RUN_LIMITS[task_kind]
     backend = build_backend()
 
-    def checks(orchestrator: bool):
+    def checks(orchestrator: bool, tutors: Sequence[Subagent] = subagents):
         stack = turn_middleware(
             task_kind,
-            subagents,
+            tutors,
             limit.tool_calls,
             limit.seconds,
             meter,
@@ -116,6 +131,29 @@ def build_owl_agent(
             trim_tokens_to_summarize=_SUMMARY_INPUT_TOKENS,
         )
         return [*stack, summarization]
+
+    if goes_direct(task_kind, subagents):
+        # The tutor answers the student itself. Its reply is reviewed at the end, as a checked
+        # answer, because there's no orchestrator to receive it first. No tutor can be asked.
+        tutor = subagents[0]
+        quiz = [PostedQuizAnswerMiddleware()] if tutor is Subagent.QUIZ_MASTER else []
+        return create_deep_agent(
+            model=get_model(
+                ModelTier.SMALL,
+                component=f"agent:{tutor.value}",
+                max_tokens=TUTORS[tutor].max_tokens,
+            ),
+            tools=list(TUTORS[tutor].tools),
+            system_prompt=TUTORS[tutor].system_prompt,
+            subagents=[],
+            skills=SKILL_SOURCES,
+            middleware=[*quiz, *checks(orchestrator=True, tutors=())],
+            context_schema=RunContext,
+            backend=backend,
+            permissions=TUTOR_PERMISSIONS[tutor],
+            store=store,
+            checkpointer=checkpointer,
+        )
 
     specs = [
         {
@@ -146,6 +184,7 @@ def build_owl_agent(
     report_check = (
         [] if needs_check(subagents) else [ReportCheckMiddleware(IntegrityCheck(get_model))]
     )
+    delegate = [DelegateFirstMiddleware()] if get_settings().force_delegation else []
     return create_deep_agent(
         model=get_model(
             ModelTier.LARGE if is_composite else ModelTier.SMALL,
@@ -155,7 +194,7 @@ def build_owl_agent(
         tools=[get_due_topics, search_memory],
         system_prompt=prompts.ORCHESTRATOR,
         subagents=specs,
-        middleware=[*join, *checks(orchestrator=True), *report_check, *todos],
+        middleware=[*join, *checks(orchestrator=True), *report_check, *todos, *delegate],
         context_schema=RunContext,
         backend=backend,
         permissions=ORCHESTRATOR_PERMISSIONS,

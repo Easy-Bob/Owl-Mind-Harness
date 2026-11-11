@@ -15,11 +15,11 @@ from langgraph.graph import START, StateGraph
 from langgraph.store.base import BaseStore
 from langgraph.types import Command
 
-from owl_mind.core import replies, telemetry
+from owl_mind.core import quiz_reuse, replies, telemetry
 from owl_mind.core.budget import BudgetExceeded, BudgetStop, RunMeter
 from owl_mind.core.config import get_settings
 from owl_mind.core.events import EventBus
-from owl_mind.core.factory import LiveAgentRunsDisabled, build_owl_agent
+from owl_mind.core.factory import LiveAgentRunsDisabled, build_owl_agent, goes_direct
 from owl_mind.core.integrity import CHECKED_TUTORS, IntegrityCheck, Verdict, fallback, needs_check
 from owl_mind.core.intent.classifier import IntentResult, IntentStep
 from owl_mind.core.intent.followup import needs_earlier, previous_chat
@@ -251,7 +251,8 @@ async def _run_agent(
     )
     # Practice and quiz answers are held until the integrity check passes, so a leak never
     # reaches the screen first.
-    checked = needs_check(result.subagents)
+    # A direct turn has no orchestrator to receive the tutor's reply first, so it's checked.
+    checked = needs_check(result.subagents) or goes_direct(result.task_kind, result.subagents)
     translator = StreamTranslator(hold_until_answer=joins or checked, keep_answer=checked)
     context = RunContext(
         student_id=request.student_id,
@@ -304,7 +305,48 @@ async def _run_agent(
         )
     if result.left_out:
         await emit("text_delta", {"text": replies.left_out_note(result.left_out)})
+    await _keep_quiz(services, request, result, context.posted_quizzes)
     return False
+
+
+async def _reuse_target(
+    services: Services, request: RunRequest, result: IntentResult
+) -> tuple[int, str] | None:
+    """The corpus version and topic a quiz turn could reuse a quiz for, if reuse applies."""
+    if not get_settings().quiz_reuse or services.search is None or request.setup is not None:
+        return None
+    if result.task_kind is not TaskKind.ASSESS or result.subagents != (Subagent.QUIZ_MASTER,):
+        return None
+    key = quiz_reuse.quiz_key(request.message)
+    return (await services.search.corpus_version(), key) if key else None
+
+
+async def _keep_quiz(
+    services: Services, request: RunRequest, result: IntentResult, quizzes: list[str]
+) -> None:
+    target = await _reuse_target(services, request, result)
+    if target is not None and len(quizzes) == 1:
+        await quiz_reuse.keep(services.store, *target, quizzes[0])
+
+
+async def _reused_quiz(
+    services: Services, request: RunRequest, result: IntentResult, emit: _Emitter
+) -> bool:
+    """Show a quiz already made from the same notes. True if there was one."""
+    target = await _reuse_target(services, request, result)
+    if target is None:
+        return False
+
+    async def seen(quiz: str) -> bool:
+        return await services.study.has_seen_quiz(request.student_id, quiz)
+
+    quiz = await quiz_reuse.find(services.store, *target, seen)
+    if quiz is None:
+        return False
+    await services.study.save_quiz_post(request.student_id, request.run_id, target[1], quiz)
+    await emit("answer", {"mode": "reused_quiz", "parts": 1})
+    await _answer(services, request, quiz, emit)
+    return True
 
 
 async def _start_input(agent: Any, config: dict[str, Any], request: RunRequest) -> Any:
@@ -486,7 +528,8 @@ async def execute_run(services: Services, request: RunRequest) -> None:
         await services.runs.set_run_setup(request.run_id, result.route.value, _kind(result), setup)
         if result.route is Route.ORCHESTRATED:
             try:
-                waiting = await _run_agent(services, request, result, config, emit, meter)
+                if not await _reused_quiz(services, request, result, emit):
+                    waiting = await _run_agent(services, request, result, config, emit, meter)
             except LiveAgentRunsDisabled:
                 await _answer(services, request, replies.AGENTS_UNAVAILABLE, emit)
         else:

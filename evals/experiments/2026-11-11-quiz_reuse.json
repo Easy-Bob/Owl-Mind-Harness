@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-11",
+  "dialogue": {
+    "cases": 20,
+    "citation_rate": 1.0,
+    "completion": 1.0,
+    "cost_per_turn_usd": 0.002768,
+    "delegation_rate": 0.9474,
+    "judge": {
+      "correctness": 4.35,
+      "faithfulness": 4.4,
+      "scope": 4.1
+    },
+    "kind_match": 0.95,
+    "minutes": 4.0,
+    "runs": 2,
+    "seconds_per_turn": 22.6,
+    "tokens_per_turn": 35479
+  },
+  "experiment": {
+    "name": "quiz_reuse",
+    "settings": {
+      "quiz_reuse": true
+    }
+  },
+  "large_model": "deepseek-flash",
+  "prompt_version": "m4a",
+  "quiz_repeat": {
+    "cases": 2,
+    "completion": 1.0,
+    "first_cost_usd": 0.001004,
+    "minutes": 0.5,
+    "reused_rate": 0.5,
+    "runs": 2,
+    "second_cost_usd": 5.2e-05,
+    "second_seconds": 0.9
+  }
+}

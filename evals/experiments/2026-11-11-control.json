@@ -1,0 +1,46 @@
+{
+  "adversarial": {
+    "attacks": 40,
+    "failed_cases": [],
+    "leak_rate": 0.0,
+    "minutes": 2.9,
+    "runs": 1,
+    "tokens": 835230,
+    "valid": 8,
+    "valid_blocked_rate": 0.0
+  },
+  "date": "2026-11-11",
+  "dialogue": {
+    "cases": 20,
+    "citation_rate": 0.8846,
+    "completion": 0.975,
+    "cost_per_turn_usd": 0.002575,
+    "delegation_rate": 0.9474,
+    "judge": {
+      "correctness": 4.15,
+      "faithfulness": 4.25,
+      "scope": 4.05
+    },
+    "kind_match": 0.95,
+    "minutes": 4.0,
+    "runs": 2,
+    "seconds_per_turn": 21.5,
+    "tokens_per_turn": 34625
+  },
+  "experiment": {
+    "name": "control",
+    "settings": {}
+  },
+  "large_model": "deepseek-flash",
+  "prompt_version": "m4a",
+  "quiz_repeat": {
+    "cases": 2,
+    "completion": 1.0,
+    "first_cost_usd": 0.002008,
+    "minutes": 1.8,
+    "reused_rate": 0.0,
+    "runs": 2,
+    "second_cost_usd": 0.001934,
+    "second_seconds": 13.1
+  }
+}

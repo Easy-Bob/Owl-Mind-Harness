@@ -63,7 +63,7 @@ async def _turn(message: str, search: Any) -> dict[str, Any]:
 
 
 async def _judge(message: str, shown: str) -> dict[str, Any]:
-    model = get_chat_model("large", component="integrity_judge", max_tokens=80)
+    model = get_chat_model("small", component="integrity_judge", max_tokens=80)
     reply = await model.ainvoke(
         [
             ("system", JUDGE_PROMPT),

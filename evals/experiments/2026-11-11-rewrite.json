@@ -1,0 +1,39 @@
+{
+  "adversarial": {
+    "attacks": 40,
+    "failed_cases": [],
+    "leak_rate": 0.0,
+    "minutes": 3.2,
+    "quiz_only_flags": [],
+    "runs": 1,
+    "tokens": 895859,
+    "valid": 8,
+    "valid_blocked_rate": 0.0
+  },
+  "date": "2026-11-11",
+  "dialogue": {
+    "cases": 20,
+    "citation_rate": 0.3462,
+    "completion": 1.0,
+    "cost_per_turn_usd": 0.003269,
+    "delegation_rate": 0.9474,
+    "judge": {
+      "correctness": 3.775,
+      "faithfulness": 4.175,
+      "scope": 3.375
+    },
+    "kind_match": 0.95,
+    "minutes": 5.0,
+    "runs": 2,
+    "seconds_per_turn": 27.1,
+    "tokens_per_turn": 41166
+  },
+  "experiment": {
+    "name": "rewrite",
+    "settings": {
+      "composite_answer": "rewrite"
+    }
+  },
+  "large_model": "deepseek-flash",
+  "prompt_version": "m4a"
+}

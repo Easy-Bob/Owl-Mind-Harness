@@ -401,6 +401,53 @@ class JoinAnswerMiddleware(AgentMiddleware):
         return ModelResponse(result=[AIMessage(content=text, id=f"joined-{uuid.uuid4()}")])
 
 
+def _turn_messages(messages: Sequence[Any]) -> list[Any]:
+    start = max((i for i, m in enumerate(messages) if isinstance(m, HumanMessage)), default=-1)
+    return list(messages[start + 1 :])
+
+
+class DelegateFirstMiddleware(AgentMiddleware):
+    """The orchestrator's first call in a turn must call a tutor (M4-D experiment).
+
+    Its prompt already says to delegate, but a capable model can answer alone, and then nothing
+    a tutor would add (notes, citations, the integrity rules) is in the answer.
+    """
+
+    def _delegated(self, messages: Sequence[Any]) -> bool:
+        return any(
+            isinstance(m, AIMessage) and any(c["name"] == "task" for c in m.tool_calls)
+            for m in _turn_messages(messages)
+        )
+
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelResponse]]
+    ) -> ModelResponse:
+        if not self._delegated(request.state.get("messages", request.messages)):
+            request = request.override(tool_choice="task")
+        return await handler(request)
+
+
+class PostedQuizAnswerMiddleware(AgentMiddleware):
+    """On a direct quiz turn, the answer is the code-made quiz, once it's posted (M4-D).
+
+    The quiz master's closing line would add nothing, so that model call is skipped.
+    """
+
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelResponse]]
+    ) -> ModelResponse:
+        context = getattr(request.runtime, "context", None)
+        quizzes = getattr(context, "posted_quizzes", None) or ()
+        last = (request.state.get("messages") or request.messages or [None])[-1]
+        posted = isinstance(last, ToolMessage) and last.name == "post_quiz"
+        if not (quizzes and posted and last.status != "error"):
+            return await handler(request)
+        record = getattr(context, "record", None)
+        if record is not None:
+            await record("answer", {"mode": "quiz", "parts": 1})
+        return ModelResponse(result=[AIMessage("\n\n".join(quizzes), id=f"quiz-{uuid.uuid4()}")])
+
+
 _WITHHELD = (
     "The tutor's reply was withheld because it solved the student's exercise ({reason}). Help "
     "with hints and questions instead, and write no working solution yourself."

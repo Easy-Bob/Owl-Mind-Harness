@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-11",
+  "experiment": {
+    "name": "quiz_reuse-r2",
+    "settings": {
+      "quiz_reuse": true
+    }
+  },
+  "large_model": "deepseek-flash",
+  "prompt_version": "m4a",
+  "quiz_repeat": {
+    "cases": 2,
+    "completion": 1.0,
+    "first_cost_usd": 0.001041,
+    "minutes": 0.5,
+    "reused_rate": 0.5,
+    "runs": 2,
+    "second_cost_usd": 5.2e-05,
+    "second_seconds": 0.9
+  }
+}

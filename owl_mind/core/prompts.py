@@ -1,6 +1,6 @@
 """Stable rules only. Prompts say when a tool is useful and never script an order of steps."""
 
-PROMPT_VERSION = "m4a"
+PROMPT_VERSION = "m4d"
 
 ENGLISH_RULE = "Always reply in English, whatever language the student writes in."
 
