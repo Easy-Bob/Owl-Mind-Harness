@@ -20,3 +20,6 @@ class RunContext:
     record: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
     # Quizzes post_quiz laid out in this turn. The student sees them exactly as written here.
     posted_quizzes: list[str] = field(default_factory=list)
+    # Set when a tutor's reply was withheld as a solution: the student asked for one, so the rest
+    # of the turn's answer is held and checked too (found by the M4-A evals).
+    flags: dict[str, bool] = field(default_factory=dict)

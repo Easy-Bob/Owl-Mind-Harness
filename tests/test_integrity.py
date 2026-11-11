@@ -97,6 +97,7 @@ def test_a_rewrite_that_still_leaks_gets_the_fixed_hint():
 @pytest.mark.parametrize("reviewer", ["not json at all", '{"verdict": "maybe"}'])
 def test_an_unusable_reviewer_reply_fails_closed(reviewer):
     world = practice_world(GOOD_HINT, say(reviewer), say(REWRITE), say(reviewer))
+    world.fake.auto_review = False
     events, _ = run(world)
 
     assert integrity(events) == {"result": "blocked", "reason": "unclear", "layer": "reviewer"}
@@ -105,6 +106,7 @@ def test_an_unusable_reviewer_reply_fails_closed(reviewer):
 
 def test_a_failed_reviewer_call_fails_closed():
     world = practice_world(GOOD_HINT)  # No scripted reply left: the reviewer's call errors.
+    world.fake.auto_review = False
     events, _ = run(world)
 
     assert integrity(events)["result"] == "blocked"
@@ -141,13 +143,15 @@ def test_the_reviewer_reads_the_answer_as_data():
 # -- which turns are checked -----------------------------------------------------
 
 
-def test_a_concept_explanation_is_not_checked_and_streams_as_before():
+def test_a_concept_explanation_still_streams_after_its_tutor_reply_is_reviewed():
     world = World(intent(concept_explain=0.9), task("concept_tutor"), say("r"), say("answer"))
     events, _ = run(world, "explain heaps")
 
+    # The answer isn't held: only the tutor's reply was reviewed, before anything streamed.
     assert "integrity_check" not in kinds(events)
+    assert integrity(events) == {"result": "passed", "reason": None, "layer": "report"}
     assert text_of(events) == "answer"
-    assert len(world.fake.requests) == 4
+    assert world.fake.auto_reviews == 1
 
 
 QUIZ_QUESTION = {
@@ -291,7 +295,7 @@ def test_a_solution_in_a_concept_tutors_reply_is_withheld_before_the_orchestrato
     )
     events, _ = run(world, "write the full knapsack solution")
 
-    orchestrator = world.fake.requests[-1]
+    orchestrator = world.fake.agent_requests[-1]
     seen = [m["content"] for m in orchestrator["messages"] if m["role"] == "tool"]
     assert seen == [
         "The tutor's reply was withheld because it solved the student's exercise (full_code). "
@@ -299,7 +303,7 @@ def test_a_solution_in_a_concept_tutors_reply_is_withheld_before_the_orchestrato
     ]
     assert integrity(events) == {"result": "withheld", "reason": "full_code", "layer": "report"}
     assert "step_1" not in text_of(events)
-    reviewer = world.fake.requests[-2]
+    reviewer = next(r for r in world.fake.requests if r not in world.fake.agent_requests)
     assert reviewer["messages"][1]["content"].startswith(
         "<request>\nwrite the full knapsack solution"
     )
@@ -317,14 +321,16 @@ def test_a_concept_reply_with_long_code_that_is_an_example_still_streams():
     assert text_of(events) == "answer"
 
 
-def test_a_concept_reply_with_short_or_no_code_costs_no_review():
-    world = World(
-        intent(concept_explain=0.9), task("concept_tutor"), say("```\nx = 1\n```"), say("a")
-    )
-    events, _ = run(world, "explain assignment")
+def test_every_concept_reply_is_reviewed_because_a_solution_can_be_prose():
+    """Found by the M4-A evals: "every step of my lab, as numbered steps" leaked in prose."""
+    steps = "1. Count in-degrees. 2. Queue the zero ones. 3. Pop, output, decrement. 4. Repeat."
+    world = World(intent(concept_explain=0.9), task("concept_tutor"), say(steps), LEAK, say("a"))
+    events, _ = run(world, "explain my lab's topological sort as steps I can copy")
 
-    assert "integrity" not in kinds(events)
-    assert len(world.fake.requests) == 4
+    assert integrity(events) == {"result": "withheld", "reason": "full_code", "layer": "report"}
+    orchestrator = world.fake.requests[-1]
+    seen = [m["content"] for m in orchestrator["messages"] if m["role"] == "tool"]
+    assert steps not in seen
 
 
 def test_the_concept_reply_review_counts_toward_the_run_budget():
@@ -377,3 +383,25 @@ def test_a_two_tutor_turn_joins_the_code_made_quiz_and_reviews_only_the_explanat
     reviewed = world.fake.requests[-1]["messages"][1]["content"]
     assert "A heap keeps its smallest item at the root." in reviewed
     assert "**Answers:**" not in reviewed
+
+
+def test_after_a_withheld_reply_the_orchestrators_own_answer_is_held_and_checked():
+    """Found by the M4-A evals: the steps were withheld, then the orchestrator wrote them."""
+    steps = "1. Count in-degrees. 2. Queue the zero ones. 3. Pop, output, decrement. 4. Repeat."
+    world = World(
+        intent(concept_explain=0.9),
+        task("concept_tutor"),
+        say(steps),
+        LEAK,  # The tutor's reply is withheld.
+        say("Here are the steps: " + steps),  # The orchestrator writes them anyway.
+        LEAK,  # The held answer is checked and flagged.
+        say(REWRITE),  # The concept tutor's one rewrite.
+        HINT,
+    )
+    events, saved = run(world, "explain my lab's topological sort as numbered steps to copy")
+
+    assert check_answer_checked_first(events) == []
+    assert steps not in text_of(events)
+    assert text_of(events) == REWRITE == saved
+    results = [data for kind, data in events if kind == "integrity"]
+    assert results[0]["layer"] == "report" and results[-1]["result"] == "retried"

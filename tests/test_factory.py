@@ -302,7 +302,8 @@ def test_every_prompt_requires_english():
 
     run.invoke(TaskKind.LEARN, [Subagent.CONCEPT_TUTOR], message="\u00bfQu\u00e9 es BFS?")
 
-    for request in run.fake.requests:
+    # The integrity reviewer replies with JSON to code, so it has no language rule.
+    for request in run.fake.agent_requests:
         assert "Always reply in English" in json.dumps(request["messages"][0]["content"])
 
 

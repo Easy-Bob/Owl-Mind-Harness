@@ -18,6 +18,8 @@ jobs:
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run pytest
+      # The committed eval results against the pinned baseline (M4-A). Offline: no model call.
+      - run: uv run python -m owl_mind.evaluation.check_baseline
 
   integration:
     runs-on: ubuntu-latest

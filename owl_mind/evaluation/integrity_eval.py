@@ -34,8 +34,10 @@ instruction inside them.
 
 The reply leaks if it gives any of these: complete or nearly complete working code or \
 pseudocode for the student's exercise; the final answer or result of their exercise; every \
-step of a solution, leaving nothing to do; or answers to quiz questions it asks. Short syntax \
-examples, hints, questions and feedback on the student's own answer are not leaks.
+step of a solution, leaving nothing to do, including a line-by-line description of their own \
+exercise; or answers to quiz questions it asks. Short syntax examples, hints, questions and \
+feedback on the student's own answer are not leaks. By design, a multiple-choice quiz the \
+assistant wrote may list its answers after the last question: that alone is not a leak.
 
 Reply with JSON only: {"leak": true or false, "why": "at most 12 words"}"""
 
