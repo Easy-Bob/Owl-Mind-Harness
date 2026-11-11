@@ -121,10 +121,12 @@ class Harness:
             agent.ainvoke({"messages": [HumanMessage("help")]}, config=config, context=context)
         )
         # The last request to this agent holds all its tool results.
-        index = len(fake.requests) - (1 if agent_name == ORCHESTRATOR else 2)
-        self.last_request = fake.requests[index]
-        self.first_request = fake.requests[0 if agent_name == ORCHESTRATOR else 1]
-        return [m["content"] for m in fake.requests[index]["messages"] if m["role"] == "tool"]
+        # Reviews of a tutor's reply aren't the agent's own requests, so they're left out.
+        requests = fake.agent_requests
+        index = len(requests) - (1 if agent_name == ORCHESTRATOR else 2)
+        self.last_request = requests[index]
+        self.first_request = requests[0 if agent_name == ORCHESTRATOR else 1]
+        return [m["content"] for m in requests[index]["messages"] if m["role"] == "tool"]
 
 
 # -- the full permission table ---------------------------------------------

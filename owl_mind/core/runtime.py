@@ -270,6 +270,10 @@ async def _run_agent(
     try:
         async with asyncio.timeout(limit.seconds):
             async for namespace, mode, data in stream:
+                if context.flags.get("check_answer") and not checked:
+                    # A solution was asked for: hold the rest of the answer and check it.
+                    checked = True
+                    translator.hold_until_answer = translator.keep_answer = True
                 for kind, event in translator.translate(namespace, mode, data):
                     # Text comes first so that the screen stays in order.
                     if kind != "text_delta":
@@ -376,7 +380,8 @@ async def _show_checked(
     shown, outcome = answer, "passed"
     if verdict.leak:
         shown, outcome = fallback(request.message), "blocked"
-        tutor = next(t for t in result.subagents if t in CHECKED_TUTORS)
+        # On a learn turn held after a withheld reply, the concept tutor does the rewrite.
+        tutor = next((t for t in result.subagents if t in CHECKED_TUTORS), result.subagents[0])
         if verdict.layer != "budget":
             rewrite = await check.rewrite(
                 tutor, request.message, rest.strip(), verdict.reason or "unclear", config

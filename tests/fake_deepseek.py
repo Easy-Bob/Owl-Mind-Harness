@@ -5,6 +5,15 @@ import json
 import httpx
 import openai
 
+from owl_mind.core.integrity import REVIEWER_PROMPT
+
+AUTO_HINT = '{"verdict": "hint", "reason": "none"}'
+
+
+def _is_review(body: dict) -> bool:
+    return (body.get("messages") or [{}])[0].get("content") == REVIEWER_PROMPT
+
+
 USAGE = {
     "prompt_tokens": 10,
     "completion_tokens": 5,
@@ -50,16 +59,35 @@ class FakeDeepSeek:
         self.status = status
         self.handler = self
         self.requests: list[dict] = []
+        self.auto_reviews = 0
+        # Off for tests about a failing or unusable review.
+        self.auto_review = True
 
     def _dispatch(self, request: httpx.Request):
         return self.handler(request)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(json.loads(request.content))
+        reply = self._next(self.requests[-1])
         if self.requests[-1].get("stream"):
-            return self._stream(self.replies.pop(0))
-        body = dict(completion(self.replies.pop(0), self.finish_reason), usage=self.usage)
+            return self._stream(reply)
+        body = dict(completion(reply, self.finish_reason), usage=self.usage)
         return httpx.Response(self.status, json=body)
+
+    @property
+    def agent_requests(self) -> list[dict]:
+        """Requests from agents, leaving out integrity reviews."""
+        return [r for r in self.requests if not _is_review(r)]
+
+    def _next(self, body: dict) -> dict:
+        """The next scripted reply. An integrity review gets "hint" unless a verdict is queued,
+        so scripts only list the reviewer's reply when a test is about the review."""
+        if self.auto_review and _is_review(body):
+            queued = self.replies[0].get("content") if self.replies else None
+            if not (isinstance(queued, str) and '"verdict"' in queued):
+                self.auto_reviews += 1
+                return {"role": "assistant", "content": AUTO_HINT}
+        return self.replies.pop(0)
 
     def attach(self, model) -> None:
         client = openai.OpenAI(

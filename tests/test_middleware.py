@@ -198,7 +198,7 @@ def test_every_agent_gets_the_code_written_context_block_as_its_last_message():
 
     result = run.invoke(TaskKind.LEARN, [Subagent.CONCEPT_TUTOR], message="zqx-student-text")
 
-    for request in run.fake.requests:
+    for request in run.fake.agent_requests:
         last = request["messages"][-1]
         assert last["role"] == "system"
         block = text_of(last)
@@ -232,7 +232,7 @@ def test_the_prompt_beginning_is_identical_for_different_students_and_days():
         )
         context = RunContext(student_id=student, store=run.store, today=today)
         asyncio.run(agent.ainvoke({"messages": [HumanMessage("help me")]}, context=context))
-        return run.fake.requests
+        return run.fake.agent_requests
 
     one = first_requests(uuid.UUID(int=1), date(2026, 11, 2))
     two = first_requests(uuid.UUID(int=2), date(2026, 12, 25))
@@ -311,8 +311,12 @@ def test_every_model_call_in_a_run_has_a_component(monkeypatch):
 
     run.invoke(TaskKind.LEARN, [Subagent.CONCEPT_TUTOR])
 
-    assert len(events) == 3
-    assert {event["component"] for event in events} == {"orchestrator", "agent:concept_tutor"}
+    assert len(events) == 4
+    assert {event["component"] for event in events} == {
+        "orchestrator",
+        "agent:concept_tutor",
+        "integrity_reviewer",
+    }
 
 
 # -- joined two-tutor answers ------------------------------------------------

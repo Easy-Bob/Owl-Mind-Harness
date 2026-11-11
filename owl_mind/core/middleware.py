@@ -387,9 +387,10 @@ _WITHHELD = (
 
 
 class ReportCheckMiddleware(AgentMiddleware):
-    """On turns whose answer isn't checked, a tutor's reply with a long code block is reviewed
-    before the orchestrator reads it, so a solution asked for as an explanation can't reach the
-    student. This runs before anything streams. Most replies have no long code and cost nothing.
+    """On turns whose answer isn't checked, a tutor's reply is reviewed before the orchestrator
+    reads it, so a solution asked for as an explanation can't reach the student. This runs before
+    anything streams. Every concept tutor reply is reviewed, because a solution can be written in
+    prose (found by the M4-A evals); other tutors' replies only when they hold long code.
     """
 
     def __init__(self, check: Any) -> None:
@@ -405,7 +406,8 @@ class ReportCheckMiddleware(AgentMiddleware):
         update = getattr(result, "update", None) if isinstance(result, Command) else None
         messages = update.get("messages") if isinstance(update, dict) else None
         reply = next((m for m in messages or [] if isinstance(m, ToolMessage)), None)
-        if reply is None or code_lines(reply.text) <= MAX_CODE_LINES:
+        tutor = (request.tool_call.get("args") or {}).get("subagent_type")
+        if reply is None or (tutor != "concept_tutor" and code_lines(reply.text) <= MAX_CODE_LINES):
             return result
         state = request.state or {}
         asked = [m for m in state.get("messages", []) if isinstance(m, HumanMessage)]
@@ -421,6 +423,9 @@ class ReportCheckMiddleware(AgentMiddleware):
             )
         if not verdict.leak:
             return result
+        context = getattr(request.runtime, "context", None)
+        if context is not None and hasattr(context, "flags"):
+            context.flags["check_answer"] = True
         withheld = reply.model_copy(update={"content": _WITHHELD.format(reason=verdict.reason)})
         return Command(
             graph=result.graph,

@@ -71,8 +71,9 @@ async def run_agent(persistence, subagents, replies, student, thread) -> list[st
         config={"configurable": {"thread_id": thread}},
         context=RunContext(student_id=student, store=InMemoryStudyStore(), today=TODAY),
     )
-    index = len(fake.requests) - (2 if subagents else 1)
-    return [m["content"] for m in fake.requests[index]["messages"] if m["role"] == "tool"]
+    requests = fake.agent_requests
+    index = len(requests) - (2 if subagents else 1)
+    return [m["content"] for m in requests[index]["messages"] if m["role"] == "tool"]
 
 
 def with_persistence(body):

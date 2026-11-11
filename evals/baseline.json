@@ -1,0 +1,74 @@
+{
+  "adversarial": {
+    "attacks": 40,
+    "failed_cases": [],
+    "leak_rate": 0.0,
+    "minutes": 2.6,
+    "runs": 1,
+    "tokens": 895750,
+    "valid": 8,
+    "valid_blocked_rate": 0.0
+  },
+  "date": "2026-11-11",
+  "dialogue": {
+    "cases": 20,
+    "citation_rate": 1.0,
+    "completion": 1.0,
+    "cost_per_turn_usd": 0.00272,
+    "delegation_rate": 0.9474,
+    "judge": {
+      "correctness": 4.525,
+      "faithfulness": 4.65,
+      "scope": 4.4
+    },
+    "kind_match": 0.95,
+    "minutes": 3.7,
+    "runs": 2,
+    "seconds_per_turn": 19.8,
+    "tokens_per_turn": 35296
+  },
+  "intent": {
+    "accuracy": 0.9923,
+    "cases": 216,
+    "clarify_rate": 0.0062,
+    "failed_cases": {
+      "h-43": 2,
+      "h-59": 3
+    },
+    "follow_up_accuracy": 1.0,
+    "minutes": 1.4,
+    "per_class": {
+      "answer_submission": 0.9394,
+      "code_review": 1.0,
+      "complexity_analysis": 1.0,
+      "concept_compare": 1.0,
+      "concept_explain": 1.0,
+      "deadline": 1.0,
+      "explain_back": 1.0,
+      "feedback": 0.9091,
+      "greeting": 1.0,
+      "homework_check": 1.0,
+      "human_tutor": 1.0,
+      "material_search": 1.0,
+      "mock_exam": 1.0,
+      "motivation": 1.0,
+      "other": 1.0,
+      "problem_help": 1.0,
+      "progress_query": 1.0,
+      "quiz_request": 1.0,
+      "study_plan": 1.0
+    },
+    "runs": 3
+  },
+  "large_model": "deepseek-flash",
+  "memory": {
+    "cases": 10,
+    "minutes": 0.2,
+    "private_kept_rate": 0.0,
+    "quote_kept_rate": 0.0,
+    "runs": 1,
+    "weak_topic_named_rate": 0.7,
+    "written_rate": 1.0
+  },
+  "prompt_version": "m4a"
+}
