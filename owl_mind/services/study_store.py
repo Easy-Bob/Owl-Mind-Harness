@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from owl_mind.services.models import (
     Grade,
     QuizAttempt,
+    QuizPost,
     QuizSpec,
     ReviewSchedule,
     Rubric,
@@ -92,6 +93,13 @@ class StudyStore(Protocol):
 
     async def get_plan(self, student_id: uuid.UUID, plan_id: uuid.UUID) -> SavedPlan | None: ...
 
+    async def save_quiz_post(
+        self, student_id: uuid.UUID, run_id: uuid.UUID, topic: str, quiz: str
+    ) -> None: ...
+
+    async def quiz_posts(self, run_id: uuid.UUID) -> list[str]:
+        """A run's posted quizzes, oldest first, so a resumed run still shows them."""
+
     async def commit_plan(self, student_id: uuid.UUID, plan_id: uuid.UUID) -> bool:
         """Commit a proposed plan once, adding its new topics to the review schedule."""
 
@@ -108,6 +116,7 @@ class InMemoryStudyStore:
         self.rubrics: dict[uuid.UUID, tuple[uuid.UUID, PinnedRubric]] = {}
         self.grades: dict[tuple[uuid.UUID, str], dict[str, Any]] = {}
         self.plans: dict[uuid.UUID, tuple[uuid.UUID, SavedPlan]] = {}
+        self.quizzes: list[tuple[uuid.UUID, uuid.UUID, str, str]] = []
 
     async def get_review(self, student_id: uuid.UUID, topic: str) -> ReviewState | None:
         return self.reviews.get((student_id, topic))
@@ -168,9 +177,24 @@ class InMemoryStudyStore:
     async def save_plan(
         self, student_id: uuid.UUID, title: str, items: list[dict[str, Any]]
     ) -> uuid.UUID:
+        for owner, plan in self.plans.values():
+            # The same proposal again, as when a run resumes, returns the first one.
+            if (owner, plan.title, plan.items, plan.status) == (
+                student_id,
+                title,
+                items,
+                "proposed",
+            ):
+                return plan.id
         plan_id = uuid.uuid4()
         self.plans[plan_id] = (student_id, SavedPlan(plan_id, title, items, "proposed"))
         return plan_id
+
+    async def save_quiz_post(self, student_id, run_id, topic, quiz) -> None:
+        self.quizzes.append((student_id, run_id, topic, quiz))
+
+    async def quiz_posts(self, run_id: uuid.UUID) -> list[str]:
+        return [quiz for _, owner_run, _, quiz in self.quizzes if owner_run == run_id]
 
     async def get_plan(self, student_id: uuid.UUID, plan_id: uuid.UUID) -> SavedPlan | None:
         owner, plan = self.plans.get(plan_id, (None, None))
@@ -304,6 +328,18 @@ class PostgresStudyStore:
     async def save_plan(
         self, student_id: uuid.UUID, title: str, items: list[dict[str, Any]]
     ) -> uuid.UUID:
+        async with self._sessions() as session:
+            # The same proposal again, as when a run resumes, returns the first one.
+            existing = await session.scalars(
+                select(StudyPlan).where(
+                    StudyPlan.student_id == student_id,
+                    StudyPlan.title == title,
+                    StudyPlan.status == "proposed",
+                )
+            )
+            for plan in existing:
+                if plan.items == items:
+                    return plan.id
         row = StudyPlan(
             id=uuid.uuid4(), student_id=student_id, title=title, items=items, status="proposed"
         )
@@ -356,3 +392,17 @@ class PostgresStudyStore:
         async with self._sessions.begin() as session:
             result = await session.execute(statement)
         return result.rowcount
+
+    async def save_quiz_post(self, student_id, run_id, topic, quiz) -> None:
+        row = QuizPost(
+            id=uuid.uuid4(), run_id=run_id, student_id=student_id, topic=topic, quiz=quiz
+        )
+        async with self._sessions.begin() as session:
+            session.add(row)
+
+    async def quiz_posts(self, run_id: uuid.UUID) -> list[str]:
+        statement = (
+            select(QuizPost.quiz).where(QuizPost.run_id == run_id).order_by(QuizPost.created_at)
+        )
+        async with self._sessions() as session:
+            return list((await session.scalars(statement)).all())

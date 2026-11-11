@@ -52,10 +52,23 @@ async def _start(http: Request, services: Services, run: RunRequest) -> None:
 _BUSY = "An answer is still being written. Wait for it to finish, then send this again."
 
 
+async def _repeat(services: Services, student: uuid.UUID, body: MessageIn) -> RunStarted | None:
+    """The run this message already started, if the browser is sending it again."""
+    if body.client_message_id is None:
+        return None
+    found = await services.runs.find_by_message(student, body.client_message_id)
+    return RunStarted(thread_id=found.thread_id, run_id=found.id) if found else None
+
+
 async def _queue_run(
-    http: Request, services: Services, student: uuid.UUID, thread_id: uuid.UUID, message: str
+    http: Request,
+    services: Services,
+    student: uuid.UUID,
+    thread_id: uuid.UUID,
+    message: str,
+    client_message_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
-    run_id = await services.runs.create_run(thread_id)
+    run_id = await services.runs.create_run(thread_id, client_message_id)
     try:
         await services.events.publish(run_id, "queued", {})
     except Exception:
@@ -70,12 +83,19 @@ async def start_thread(
 ) -> RunStarted:
     if not body.message.strip():
         raise HTTPException(status_code=422, detail="A new chat needs a first message")
+    if repeated := await _repeat(services, student, body):
+        return repeated
     thread = await services.runs.create_thread(student, _title(body.message))
     try:
-        run_id = await _queue_run(http, services, student, thread.id, body.message)
+        run_id = await _queue_run(
+            http, services, student, thread.id, body.message, body.client_message_id
+        )
     except ActiveRunExists as exc:
         # No empty chat is left behind in the student's list.
         await services.runs.delete_empty_thread(thread.id)
+        # Two copies of one message at once: the one that lost the race gets the winner's run.
+        if repeated := await _repeat(services, student, body):
+            return repeated
         raise HTTPException(status_code=409, detail=_BUSY) from exc
     await asyncio.to_thread(record_activity, "session_started", student, thread.id)
     await asyncio.to_thread(record_activity, "message_sent", student, thread.id)
@@ -94,12 +114,27 @@ async def send_message(
 ) -> RunStarted:
     if await services.runs.get_thread(student, thread_id) is None:
         raise HTTPException(status_code=404, detail="Thread not found")
+    if repeated := await _repeat(services, student, body):
+        return repeated
     try:
-        run_id = await _queue_run(http, services, student, thread_id, body.message)
+        run_id = await _queue_run(
+            http, services, student, thread_id, body.message, body.client_message_id
+        )
     except ActiveRunExists as exc:
+        if repeated := await _repeat(services, student, body):
+            return repeated
         raise HTTPException(status_code=409, detail=_BUSY) from exc
     await asyncio.to_thread(record_activity, "message_sent", student, thread_id)
     return RunStarted(thread_id=thread_id, run_id=run_id)
+
+
+@router.get("/threads/{thread_id}/active")
+async def active_run(thread_id: uuid.UUID, student: Student, services: ServicesDep) -> RunStarted:
+    """The answer still being written in this chat, so a reload can follow it to the end."""
+    found = await services.runs.active_run(student, thread_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="No answer is being written")
+    return RunStarted(thread_id=thread_id, run_id=found.id)
 
 
 @router.get("/threads/{thread_id}/messages")

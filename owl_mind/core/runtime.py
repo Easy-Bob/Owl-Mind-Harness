@@ -74,6 +74,9 @@ class RunRequest:
     # Set when the run resumes a paused one: the student's decision and the paused run's setup.
     resume: dict[str, Any] | None = None
     setup: dict[str, Any] | None = None
+    # Set when a worker takes over a run another worker left: the agent goes on from the
+    # thread's last checkpoint with no new input, so the question isn't added twice (M4-C).
+    from_checkpoint: bool = False
 
 
 class _RunStopped(Exception):
@@ -256,12 +259,13 @@ async def _run_agent(
         today=datetime.now(UTC).date(),
         search=services.search,
         record=emit,
+        run_id=request.run_id,
     )
-    start = (
-        Command(resume=request.resume)
-        if request.resume is not None
-        else {"messages": [HumanMessage(request.message)]}
-    )
+    # A quiz posted before a takeover or an approval still counts: one per turn, and its
+    # answers are left out of the review.
+    for run_id in _turn_runs(request):
+        context.posted_quizzes.extend(await services.study.quiz_posts(run_id))
+    start = await _start_input(agent, config, request)
     stream = agent.astream(
         start,
         config=config,
@@ -303,6 +307,29 @@ async def _run_agent(
     return False
 
 
+async def _start_input(agent: Any, config: dict[str, Any], request: RunRequest) -> Any:
+    """What the agent is called with. A taken-over run goes on from where the checkpoint is."""
+    question = {"messages": [HumanMessage(request.message)]}
+    if not request.from_checkpoint:
+        return Command(resume=request.resume) if request.resume is not None else question
+    state = await agent.aget_state(config)
+    if any(task.interrupts for task in state.tasks):
+        # Still paused: give the student's answer if there is one, else ask again.
+        return Command(resume=request.resume) if request.resume is not None else None
+    if state.next:
+        return None  # Mid-turn: carry on with no new input.
+    asked = [m for m in state.values.get("messages", []) if isinstance(m, HumanMessage)]
+    if request.resume is None and (not asked or asked[-1].content != request.message):
+        return question  # Stopped before the question reached the thread.
+    return None
+
+
+def _turn_runs(request: RunRequest) -> list[uuid.UUID]:
+    """This run and, when it resumes a paused one, that run too: together they are one turn."""
+    paused = (request.setup or {}).get("paused_run")
+    return [request.run_id, *([uuid.UUID(paused)] if paused else [])]
+
+
 def _setup(result: IntentResult) -> dict[str, Any]:
     return {
         "task_kind": result.task_kind.value,
@@ -330,8 +357,13 @@ async def _ask_approval(
     """Save what the tool asked, and show the student the card. The run then waits."""
     if services.approvals is None:
         raise RuntimeError("No approval store, so no change can be approved")
+    paused = (request.setup or {}).get("paused_run") or str(request.run_id)
     approval = await services.approvals.create(
-        request.run_id, request.student_id, request.thread_id, asked, _setup(result)
+        request.run_id,
+        request.student_id,
+        request.thread_id,
+        asked,
+        {**_setup(result), "paused_run": paused},
     )
     await emit("approval", {"step": "requested", "kind": approval.kind})
     await emit(
@@ -422,7 +454,7 @@ async def _classify(
 
 async def execute_run(services: Services, request: RunRequest) -> None:
     emit = _Emitter(services, request.run_id)
-    meter = RunMeter(services.budgets, request.student_id, record=emit)
+    meter = RunMeter(services.budgets, request.student_id, record=emit, run_id=request.run_id)
     config = {
         **_thread_config(request.thread_id),
         "metadata": {
@@ -434,6 +466,8 @@ async def execute_run(services: Services, request: RunRequest) -> None:
     waiting = False
     try:
         await services.runs.set_run_status(request.run_id, "running")
+        # What this turn spent before a takeover or an approval still counts.
+        await meter.restore(*_turn_runs(request))
         if request.setup is not None:
             # A resumed run continues the paused turn, so the intent step isn't asked again.
             result, closed = _from_setup(request.setup), None
@@ -442,7 +476,14 @@ async def execute_run(services: Services, request: RunRequest) -> None:
             result, closed = await _classify(services, request, config, meter)
         if result is None or (closed and result.route is Route.ORCHESTRATED):
             raise closed
-        await services.runs.set_run_setup(request.run_id, result.route.value, _kind(result))
+        setup = None
+        if result.route is Route.ORCHESTRATED:
+            # Saved so a worker that takes this run over resumes it without the intent step.
+            setup = {
+                **_setup(result),
+                **{k: v for k, v in (request.setup or {}).items() if k == "paused_run"},
+            }
+        await services.runs.set_run_setup(request.run_id, result.route.value, _kind(result), setup)
         if result.route is Route.ORCHESTRATED:
             try:
                 waiting = await _run_agent(services, request, result, config, emit, meter)

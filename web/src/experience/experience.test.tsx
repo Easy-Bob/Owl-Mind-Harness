@@ -523,6 +523,51 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByLabelText("Your message")).toBeEnabled());
   });
 
+  it("sends each message with its own ID, and resends a lost one with the same ID", async () => {
+    let lost = true;
+    const calls = fakeServer({ ...loggedIn, "POST /threads": started });
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const answer = fetchMock.getMockImplementation() as (path: string, init?: RequestInit) => Promise<Response>;
+    fetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/threads" && init?.method === "POST" && lost) {
+        lost = false;
+        calls.push({ key: "POST /threads", body: JSON.parse(init.body as string) });
+        throw new TypeError("network");
+      }
+      return answer(path, init);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("Your message"), "hello{Enter}");
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    const sent = calls.filter((c) => c.key === "POST /threads").map((c) => c.body as { client_message_id: string });
+    expect(sent).toHaveLength(2);
+    expect(sent[0].client_message_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(sent[1].client_message_id).toBe(sent[0].client_message_id);
+  });
+
+  it("follows an answer still being written when the chat is opened", async () => {
+    fakeServer({
+      ...loggedIn,
+      "GET /threads": { body: [{ id: "t1", title: "Heaps", created_at: "2026-11-03T00:00:00Z" }] },
+      "GET /threads/t1/messages": { body: [{ role: "user", content: "explain heaps" }] },
+      "GET /threads/t1/active": { body: { thread_id: "t1", run_id: "r9" } },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Heaps" }));
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    expect(lastStream().url).toBe("/runs/r9/stream");
+    lastStream().emit("text_delta", { text: "A heap is a tree." });
+    lastStream().emit("done", { status: "completed" });
+    expect(await screen.findByText("A heap is a tree.")).toBeVisible();
+    await waitFor(() => expect(screen.getByLabelText("Your message")).toBeEnabled());
+  });
+
   it("gives a message back to the student if sending it fails", async () => {
     fakeServer({ ...loggedIn, "POST /threads": { status: 500, body: { detail: "Server trouble" } } });
     const user = userEvent.setup();

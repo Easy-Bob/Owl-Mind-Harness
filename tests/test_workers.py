@@ -5,7 +5,7 @@ import uuid
 
 from owl_mind.core.runtime import RunRequest
 from owl_mind.worker import runs as worker
-from owl_mind.worker.runs import INTERRUPTED, _decode, _encode, handle
+from owl_mind.worker.runs import _decode, _encode, handle
 from tests.test_filesystem import ALICE
 from tests.test_runtime import World, intent, say, start
 from tests.test_runtime import settings as runtime_settings  # noqa: F401  Applied to all.
@@ -83,19 +83,6 @@ def test_a_worker_runs_a_queued_run_once_and_acknowledges_it():
     assert len(world.fake.requests) == 2  # Intent and orchestrator, once.
 
 
-def test_a_run_another_worker_left_mid_way_is_failed_not_left_running():
-    world, queue = queued_world()
-    request = queued_run(world)
-    asyncio.run(world.runs.set_run_status(request.run_id, "running"))
-
-    step = asyncio.run(handle(world.services, queue, message(request)))
-
-    assert step == "interrupted"
-    assert world.runs.runs[request.run_id].status == "failed"
-    [(_, kind, data)] = world.bus.events[request.run_id]
-    assert (kind, data) == ("error", {"message": INTERRUPTED})
-
-
 def test_a_run_delivered_more_than_three_times_goes_to_the_dead_letters():
     world, _ = queued_world()
     queue = FakeQueue(deliveries=4)
@@ -124,5 +111,6 @@ def test_every_background_job_is_listed_for_the_workers():
     world, _ = queued_world()
     names = [name for name, _, _ in jobs(world.services)]
 
-    assert names == ["approvals"]  # Memory and the forum aren't set up in this test world.
+    # Memory and the forum aren't set up in this test world.
+    assert names == ["approvals", "resume"]
     assert worker.MAX_DELIVERIES == 3

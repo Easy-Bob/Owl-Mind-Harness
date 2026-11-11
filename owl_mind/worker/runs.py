@@ -15,7 +15,8 @@ import os
 import socket
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from redis.asyncio import Redis
@@ -34,6 +35,8 @@ GROUP = "runners"
 CLAIM_MS = 10 * 60 * 1000
 MAX_DELIVERIES = 3
 INTERRUPTED = "This answer was interrupted. Please ask again."
+# A run taken over later than this is failed rather than resumed.
+RESUME_WITHIN = timedelta(hours=1)
 
 
 def _encode(request: RunRequest) -> str:
@@ -122,15 +125,26 @@ async def handle(
     if status in (*FINISHED, WAITING):
         await queue.ack(message_id)
         return "already done"
+    step = "ran"
     if status == "running":
-        # Taken over from a worker that stopped mid-run. M4-C resumes it from its checkpoint;
-        # until then it's failed, so it never stays running.
-        await fail_run(services, request.run_id, INTERRUPTED)
-        await queue.ack(message_id)
-        return "interrupted"
+        # Taken over from a worker that stopped mid-run (M4-C).
+        found = await services.runs.takeover(request.run_id)
+        if found is None or datetime.now(UTC) - found.created_at > RESUME_WITHIN:
+            # Too old to be worth finishing: the student has long since moved on.
+            await fail_run(services, request.run_id, INTERRUPTED)
+            await queue.ack(message_id)
+            return "interrupted"
+        if found.setup is not None:
+            # The intent step had finished: go on from the last checkpoint, with the same setup,
+            # so the question isn't added twice and finished tutor calls aren't paid for again.
+            request = replace(request, setup=found.setup, from_checkpoint=True)
+            step = "resumed"
+        else:
+            # Stopped before the intent step chose a setup, so nothing reached the thread yet.
+            step = "restarted"
     await run(services, request)
     await queue.ack(message_id)
-    return "ran"
+    return step
 
 
 class JobLease:

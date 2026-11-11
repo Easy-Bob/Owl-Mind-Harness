@@ -72,6 +72,10 @@ class ApprovalStore(Protocol):
     async def expire_due(self) -> list[uuid.UUID]:
         """Expire every approval past its time, and return their runs."""
 
+    async def unresumed(self, older_than: timedelta) -> list[tuple[ApprovalInfo, uuid.UUID]]:
+        """Approvals answered this long ago whose resume run was never made, as when the API
+        stopped between the two steps (M4-C). Each comes with its student."""
+
 
 class InMemoryApprovalStore:
     """The same behavior for unit tests, with no database."""
@@ -79,6 +83,7 @@ class InMemoryApprovalStore:
     def __init__(self) -> None:
         self.rows: dict[uuid.UUID, tuple[uuid.UUID, ApprovalInfo]] = {}
         self.resumed: dict[uuid.UUID, uuid.UUID] = {}
+        self.decided_at: dict[uuid.UUID, datetime] = {}
 
     async def create(self, run_id, student_id, thread_id, request, setup) -> ApprovalInfo:
         if any(o == student_id and a.status == "pending" for o, a in self.rows.values()):
@@ -116,6 +121,7 @@ class InMemoryApprovalStore:
         if info.status != "pending" or info.expires_at <= datetime.now(UTC):
             return False
         self.rows[approval_id] = (owner, replace(info, status=status))
+        self.decided_at[approval_id] = datetime.now(UTC)
         return True
 
     async def set_resume_run(self, approval_id: uuid.UUID, run_id: uuid.UUID) -> None:
@@ -129,6 +135,16 @@ class InMemoryApprovalStore:
                 self.rows[approval_id] = (owner, replace(info, status="expired"))
                 expired.append(info.run_id)
         return expired
+
+    async def unresumed(self, older_than: timedelta) -> list[tuple[ApprovalInfo, uuid.UUID]]:
+        before = datetime.now(UTC) - older_than
+        return [
+            (info, owner)
+            for approval_id, (owner, info) in self.rows.items()
+            if info.status in ("approved", "rejected")
+            and approval_id not in self.resumed
+            and self.decided_at.get(approval_id, before) <= before
+        ]
 
 
 class PostgresApprovalStore:
@@ -199,3 +215,13 @@ class PostgresApprovalStore:
         )
         async with self._sessions.begin() as session:
             return list((await session.scalars(statement)).all())
+
+    async def unresumed(self, older_than: timedelta) -> list[tuple[ApprovalInfo, uuid.UUID]]:
+        statement = select(Approval).where(
+            Approval.status.in_(("approved", "rejected")),
+            Approval.resume_run_id.is_(None),
+            Approval.decided_at <= datetime.now(UTC) - older_than,
+        )
+        async with self._sessions() as session:
+            rows = (await session.scalars(statement)).all()
+        return [(_info(row), row.student_id) for row in rows]

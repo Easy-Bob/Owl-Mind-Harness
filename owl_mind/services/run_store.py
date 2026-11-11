@@ -40,6 +40,15 @@ class RunInfo:
     task_kind: str | None = None
 
 
+@dataclass(frozen=True)
+class Takeover:
+    """What a worker needs to resume a run another worker left."""
+
+    created_at: datetime
+    route: str | None
+    setup: dict[str, Any] | None
+
+
 @runtime_checkable
 class RunStore(Protocol):
     async def create_thread(self, student_id: uuid.UUID, title: str) -> ThreadInfo: ...
@@ -49,8 +58,20 @@ class RunStore(Protocol):
     async def get_thread(self, student_id: uuid.UUID, thread_id: uuid.UUID) -> ThreadInfo | None:
         """Return None if the thread is not this student's."""
 
-    async def create_run(self, thread_id: uuid.UUID) -> uuid.UUID:
+    async def create_run(
+        self, thread_id: uuid.UUID, client_message_id: uuid.UUID | None = None
+    ) -> uuid.UUID:
         """Raise ActiveRunExists if the thread's student has an unfinished run anywhere."""
+
+    async def find_by_message(
+        self, student_id: uuid.UUID, client_message_id: uuid.UUID
+    ) -> RunInfo | None:
+        """The run this message ID already started, so a repeat returns it (M4-C)."""
+
+    async def takeover(self, run_id: uuid.UUID) -> Takeover | None: ...
+
+    async def active_run(self, student_id: uuid.UUID, thread_id: uuid.UUID) -> RunInfo | None:
+        """The chat's answer still being written, so a reopened chat can follow it."""
 
     async def delete_empty_thread(self, thread_id: uuid.UUID) -> None:
         """Remove a thread that never got a run, such as one refused for a run elsewhere."""
@@ -60,7 +81,9 @@ class RunStore(Protocol):
 
     async def set_run_status(self, run_id: uuid.UUID, status: str) -> None: ...
 
-    async def set_run_setup(self, run_id: uuid.UUID, route: str, task_kind: str | None) -> None: ...
+    async def set_run_setup(
+        self, run_id: uuid.UUID, route: str, task_kind: str | None, setup: dict | None = None
+    ) -> None: ...
 
     async def fail_unfinished_runs(self) -> int: ...
 
@@ -80,6 +103,9 @@ class InMemoryRunStore:
         self.threads: dict[uuid.UUID, tuple[uuid.UUID, ThreadInfo]] = {}
         self.runs: dict[uuid.UUID, RunInfo] = {}
         self.events: dict[tuple[uuid.UUID, str], tuple[str, dict[str, Any]]] = {}
+        self.messages: dict[tuple[uuid.UUID, uuid.UUID], uuid.UUID] = {}
+        self.setups: dict[uuid.UUID, dict] = {}
+        self.created: dict[uuid.UUID, datetime] = {}
 
     async def create_thread(self, student_id: uuid.UUID, title: str) -> ThreadInfo:
         info = ThreadInfo(uuid.uuid4(), title, datetime.now(UTC))
@@ -94,14 +120,35 @@ class InMemoryRunStore:
         owner, info = self.threads.get(thread_id, (None, None))
         return info if owner == student_id else None
 
-    async def create_run(self, thread_id: uuid.UUID) -> uuid.UUID:
+    async def create_run(self, thread_id, client_message_id=None) -> uuid.UUID:
         student = self.threads[thread_id][0]
         busy = {self.threads[r.thread_id][0] for r in self.runs.values() if r.status in BUSY}
-        if student in busy:
+        if student in busy or (student, client_message_id) in self.messages:
             raise ActiveRunExists
         run_id = uuid.uuid4()
         self.runs[run_id] = RunInfo(run_id, thread_id, "queued")
+        self.created[run_id] = datetime.now(UTC)
+        if client_message_id is not None:
+            self.messages[(student, client_message_id)] = run_id
         return run_id
+
+    async def find_by_message(self, student_id, client_message_id) -> RunInfo | None:
+        run_id = self.messages.get((student_id, client_message_id))
+        return self.runs.get(run_id) if run_id else None
+
+    async def takeover(self, run_id: uuid.UUID) -> Takeover | None:
+        run = self.runs.get(run_id)
+        if run is None:
+            return None
+        return Takeover(self.created[run_id], run.route, self.setups.get(run_id))
+
+    async def active_run(self, student_id, thread_id) -> RunInfo | None:
+        if await self.get_thread(student_id, thread_id) is None:
+            return None
+        return next(
+            (r for r in self.runs.values() if r.thread_id == thread_id and r.status in UNFINISHED),
+            None,
+        )
 
     async def delete_empty_thread(self, thread_id: uuid.UUID) -> None:
         if not any(r.thread_id == thread_id for r in self.runs.values()):
@@ -116,8 +163,10 @@ class InMemoryRunStore:
     async def set_run_status(self, run_id: uuid.UUID, status: str) -> None:
         self.runs[run_id] = replace(self.runs[run_id], status=status)
 
-    async def set_run_setup(self, run_id: uuid.UUID, route: str, task_kind: str | None) -> None:
+    async def set_run_setup(self, run_id, route, task_kind, setup=None) -> None:
         self.runs[run_id] = replace(self.runs[run_id], route=route, task_kind=task_kind)
+        if setup is not None:
+            self.setups[run_id] = setup
 
     async def status_of(self, run_id: uuid.UUID) -> str | None:
         run = self.runs.get(run_id)
@@ -164,13 +213,19 @@ class PostgresRunStore:
             return None
         return ThreadInfo(row.id, row.title, row.created_at)
 
-    async def create_run(self, thread_id: uuid.UUID) -> uuid.UUID:
+    async def create_run(self, thread_id, client_message_id=None) -> uuid.UUID:
         try:
             async with self._sessions.begin() as session:
                 student = await session.scalar(
                     select(Thread.student_id).where(Thread.id == thread_id)
                 )
-                row = Run(id=uuid.uuid4(), thread_id=thread_id, student_id=student, status="queued")
+                row = Run(
+                    id=uuid.uuid4(),
+                    thread_id=thread_id,
+                    student_id=student,
+                    status="queued",
+                    client_message_id=client_message_id,
+                )
                 session.add(row)
         except IntegrityError as exc:
             # Partial unique indexes allow one unfinished run per thread and per student, even
@@ -204,8 +259,37 @@ class PostgresRunStore:
         async with self._sessions.begin() as session:
             await session.execute(update(Run).where(Run.id == run_id).values(status=status))
 
-    async def set_run_setup(self, run_id: uuid.UUID, route: str, task_kind: str | None) -> None:
-        values = {"route": route, "task_kind": task_kind}
+    async def find_by_message(self, student_id, client_message_id) -> RunInfo | None:
+        statement = select(Run).where(
+            Run.student_id == student_id, Run.client_message_id == client_message_id
+        )
+        async with self._sessions() as session:
+            row = await session.scalar(statement)
+        if row is None:
+            return None
+        return RunInfo(row.id, row.thread_id, row.status, row.route, row.task_kind)
+
+    async def active_run(self, student_id, thread_id) -> RunInfo | None:
+        statement = select(Run).where(
+            Run.thread_id == thread_id,
+            Run.student_id == student_id,
+            Run.status.in_(UNFINISHED),
+        )
+        async with self._sessions() as session:
+            row = await session.scalar(statement)
+        if row is None:
+            return None
+        return RunInfo(row.id, row.thread_id, row.status, row.route, row.task_kind)
+
+    async def takeover(self, run_id: uuid.UUID) -> Takeover | None:
+        async with self._sessions() as session:
+            row = await session.get(Run, run_id)
+        return Takeover(row.created_at, row.route, row.setup) if row else None
+
+    async def set_run_setup(self, run_id, route, task_kind, setup=None) -> None:
+        values: dict[str, Any] = {"route": route, "task_kind": task_kind}
+        if setup is not None:
+            values["setup"] = setup
         async with self._sessions.begin() as session:
             await session.execute(update(Run).where(Run.id == run_id).values(**values))
 

@@ -82,7 +82,12 @@ async def post_quiz(
     for number, question in enumerate(kept, start=1):
         if problem := _problem(number, question):
             return {"error": problem}
-    runtime.context.posted_quizzes.append(render(topic, kept))
+    quiz = render(topic, kept)
+    context = runtime.context
+    context.posted_quizzes.append(quiz)
+    if context.run_id is not None:
+        # Kept, so a run resumed by another worker still shows the quiz.
+        await context.store.save_quiz_post(context.student_id, context.run_id, topic, quiz)
     result: dict[str, Any] = {"status": "posted", "questions": len(kept)}
     if len(questions) > len(kept):
         result["note"] = f"Only the first {MAX_QUESTIONS} questions were kept."
