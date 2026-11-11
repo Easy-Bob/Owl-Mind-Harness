@@ -5,64 +5,14 @@ always previews and approves the exact text before anything is posted.
 """
 
 import re
-from collections import Counter
-from dataclasses import dataclass
+
+from owl_mind.services.privacy import Redacted, redact  # noqa: F401  Imported from here.
+
+_CODE_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 
 GRADED_QUESTION_CHARS = 400
 CODE_LINES = 10
 GRADED_CODE_LINES = 5
-
-_RULES: list[tuple[str, re.Pattern[str], str]] = [
-    ("email", re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"), "[email removed]"),
-    (
-        "secret",
-        re.compile(
-            r"\b(?:sk-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
-            r"|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,})"
-        ),
-        "[secret removed]",
-    ),
-    (
-        "secret",
-        re.compile(r"(?i)\b(password|passwd|pwd|api[_-]?key|token|secret)\b(\s*[:=]\s*)(?!\[)\S+"),
-        r"\1\2[secret removed]",
-    ),
-    ("student id", re.compile(r"\b[Ss]\d{7,9}\b|\b\d{9}\b"), "[id removed]"),
-    ("netid", re.compile(r"\(\s*[a-z]{2,4}[0-9]{1,3}\s*\)"), "[id removed]"),
-    (
-        "phone",
-        re.compile(r"(?<!\w)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\w)"),
-        "[phone removed]",
-    ),
-    # Only explicit introductions: "I am stuck" mustn't lose a word.
-    (
-        "name",
-        re.compile(r"(?i:\b(my name is|name:))\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"),
-        r"\1 [name removed]",
-    ),
-]
-
-_CODE_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
-
-
-@dataclass(frozen=True)
-class Redacted:
-    text: str
-    removed: dict[str, int]
-
-
-def redact(text: str, known_values: list[str] = ()) -> Redacted:
-    """Remove private details, plus any exact values known to belong to the student."""
-    counts: Counter[str] = Counter()
-    for value in known_values:
-        if value and len(value) >= 3:
-            pattern = re.compile(re.escape(value), re.IGNORECASE)
-            text, found = pattern.subn("[removed]", text)
-            counts["known detail"] += found
-    for kind, pattern, replacement in _RULES:
-        text, found = pattern.subn(replacement, text)
-        counts[kind] += found
-    return Redacted(text, {kind: n for kind, n in counts.items() if n})
 
 
 def trim_code(text: str, max_lines: int) -> str:

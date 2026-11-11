@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 const apiUrl = process.env.API_URL ?? "http://localhost:8010";
 const proxy = Object.fromEntries(
   // Every API route's first segment. tests/test_guard_rails.py checks none is missing.
-  ["/auth", "/threads", "/runs", "/admin", "/handoffs", "/forum", "/citations", "/help"].map(
+  ["/auth", "/threads", "/runs", "/admin", "/handoffs", "/forum", "/citations", "/help", "/memory"].map(
     (path) => [path, { target: apiUrl }],
   ),
 );

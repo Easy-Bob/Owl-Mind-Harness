@@ -45,7 +45,7 @@ async def open_persistence(
 ) -> AsyncIterator[Persistence]:
     """Open the Postgres saver and store. Run the Alembic migrations first.
 
-    With no embed function, the store has no vector index. Nothing searches memory until M3-D.
+    With an embed function, the store gets a vector index, so memory is searched by meaning.
     """
     async with _pool(database_url, "lg_checkpoint") as checkpoint_pool:
         async with _pool(database_url, "lg_store") as store_pool:
@@ -53,7 +53,13 @@ async def open_persistence(
             store = AsyncPostgresStore(
                 store_pool,
                 index=(
-                    {"dims": EMBEDDING_DIMS, "embed": embed, "distance_type": "cosine"}
+                    # Only a file's text is embedded, so memory is searched by what it says.
+                    {
+                        "dims": EMBEDDING_DIMS,
+                        "embed": embed,
+                        "distance_type": "cosine",
+                        "fields": ["content"],
+                    }
                     if embed
                     else None
                 ),

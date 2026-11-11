@@ -14,6 +14,10 @@ from owl_mind.forum.accounts import RECONNECT_MESSAGE, ForumAccounts, ReconnectN
 from owl_mind.forum.github import Forum, ForumAuthFailed, ForumUnavailable, SimilarPost
 from owl_mind.forum.redact import CODE_LINES, escape_markdown, for_graded_problem, redact, trim_code
 from owl_mind.forum.store import Handoff, HandoffStore, SavedReply
+from owl_mind.services import privacy
+
+# Moved to services/privacy, which memory shares. Kept here for the forum code that uses it.
+known_values = privacy.known_values
 
 POST_INTERVAL = timedelta(minutes=10)
 MAX_TITLE_CHARS = 120
@@ -34,13 +38,6 @@ class NeedsReview(Exception):
 
     def __init__(self, handoff: Handoff) -> None:
         self.handoff = handoff
-
-
-def known_values(email: str) -> list[str]:
-    """The student's own email and the name parts of it are always removed, wherever they appear."""
-    local = email.split("@", 1)[0]
-    parts = re.split(r"[._+-]", local)
-    return [email, local, *(part for part in parts if len(part) >= 3)]
 
 
 def summarize(message: str, earlier: list[str]) -> tuple[str, str]:

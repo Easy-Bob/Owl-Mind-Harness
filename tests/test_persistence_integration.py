@@ -83,7 +83,7 @@ def test_thread_and_store_survive_a_restart_of_process_and_containers():
 
     result = probe("read", thread_id)
     assert result["messages"] == ["hello", "reply 1"]
-    assert result["store"] == {"text": "weak on recursion"}
+    assert result["store"] == {"content": "weak on recursion"}
     assert thread_id in result["search"]
 
 

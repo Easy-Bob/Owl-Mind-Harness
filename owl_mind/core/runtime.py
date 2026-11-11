@@ -59,6 +59,8 @@ class Services:
     budgets: Any = None
     # An ApprovalStore. Without one, a change that needs approval fails the run.
     approvals: Any = None
+    # A MemoryWriter, for the background job. Reading memory needs only the store.
+    memory: Any = None
 
 
 @dataclass(frozen=True)
