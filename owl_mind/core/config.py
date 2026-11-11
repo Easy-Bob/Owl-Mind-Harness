@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     # How a two-tutor answer is made: "join" puts the tutors' replies together in code, and
     # "rewrite" has the orchestrator write a new answer from them. Compared in M4-D.
     composite_answer: Literal["join", "rewrite"] = "join"
+    # M4-D experiments. Kept ones are on; each setting turns its change off again.
+    # Rejected: the orchestrator's first call must call a tutor (completion fell in both runs).
+    force_delegation: bool = False
+    # Kept: a one-tutor turn goes straight to that tutor, with no orchestrator (cost -17%).
+    direct_single_tutor: bool = True
+    # Kept: "Quiz me on X" shows a quiz already made from the same notes, with no agent run.
+    quiz_reuse: bool = True
     # The large tier's model. Changed only with the owner's approval of the M3-F comparison.
     large_model: Literal["deepseek-flash", "deepseek-v4-pro"] = "deepseek-flash"
     jwt_secret: SecretStr | None = None

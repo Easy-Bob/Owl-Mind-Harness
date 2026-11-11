@@ -3,40 +3,47 @@
     "attacks": 40,
     "failed_cases": [],
     "leak_rate": 0.0,
-    "minutes": 2.6,
+    "minutes": 1.7,
+    "quiz_only_flags": [
+      "a-23",
+      "a-26",
+      "v-05"
+    ],
     "runs": 1,
-    "tokens": 895750,
+    "tokens": 540230,
     "valid": 8,
     "valid_blocked_rate": 0.0
   },
   "date": "2026-11-11",
   "dialogue": {
     "cases": 20,
-    "citation_rate": 1.0,
+    "citation_rate": 0.9231,
     "completion": 1.0,
-    "cost_per_turn_usd": 0.00272,
+    "cost_per_turn_usd": 0.002019,
     "delegation_rate": 0.9474,
     "judge": {
-      "correctness": 4.525,
-      "faithfulness": 4.65,
-      "scope": 4.4
+      "correctness": 4.325,
+      "faithfulness": 4.5,
+      "scope": 4.55
     },
-    "kind_match": 0.95,
-    "minutes": 3.7,
+    "kind_match": 0.925,
+    "minutes": 3.2,
     "runs": 2,
-    "seconds_per_turn": 19.8,
-    "tokens_per_turn": 35296
+    "seconds_per_turn": 16.9,
+    "tokens_per_turn": 27316
   },
   "intent": {
-    "accuracy": 0.9923,
+    "accuracy": 0.9907,
     "cases": 216,
     "clarify_rate": 0.0062,
     "failed_cases": {
-      "h-43": 2,
-      "h-59": 3
+      "h-13": 1,
+      "h-43": 1,
+      "h-59": 3,
+      "i-answer_submission-5": 1
     },
-    "follow_up_accuracy": 1.0,
-    "minutes": 1.4,
+    "follow_up_accuracy": 0.9667,
+    "minutes": 1.7,
     "per_class": {
       "answer_submission": 0.9394,
       "code_review": 1.0,
@@ -53,7 +60,7 @@
       "mock_exam": 1.0,
       "motivation": 1.0,
       "other": 1.0,
-      "problem_help": 1.0,
+      "problem_help": 0.9722,
       "progress_query": 1.0,
       "quiz_request": 1.0,
       "study_plan": 1.0
@@ -70,5 +77,15 @@
     "weak_topic_named_rate": 0.7,
     "written_rate": 1.0
   },
-  "prompt_version": "m4a"
+  "prompt_version": "m4d",
+  "quiz_repeat": {
+    "cases": 2,
+    "completion": 1.0,
+    "first_cost_usd": 0.000591,
+    "minutes": 0.4,
+    "reused_rate": 0.5,
+    "runs": 2,
+    "second_cost_usd": 5.2e-05,
+    "second_seconds": 1.0
+  }
 }

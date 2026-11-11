@@ -100,6 +100,9 @@ class StudyStore(Protocol):
     async def quiz_posts(self, run_id: uuid.UUID) -> list[str]:
         """A run's posted quizzes, oldest first, so a resumed run still shows them."""
 
+    async def has_seen_quiz(self, student_id: uuid.UUID, quiz: str) -> bool:
+        """Whether this quiz was already shown to the student, so reuse never repeats one."""
+
     async def commit_plan(self, student_id: uuid.UUID, plan_id: uuid.UUID) -> bool:
         """Commit a proposed plan once, adding its new topics to the review schedule."""
 
@@ -196,6 +199,9 @@ class InMemoryStudyStore:
     async def quiz_posts(self, run_id: uuid.UUID) -> list[str]:
         return [quiz for _, owner_run, _, quiz in self.quizzes if owner_run == run_id]
 
+    async def has_seen_quiz(self, student_id: uuid.UUID, quiz: str) -> bool:
+        return any(owner == student_id and q == quiz for owner, _, _, q in self.quizzes)
+
     async def get_plan(self, student_id: uuid.UUID, plan_id: uuid.UUID) -> SavedPlan | None:
         owner, plan = self.plans.get(plan_id, (None, None))
         return plan if owner == student_id else None
@@ -251,6 +257,13 @@ class PostgresStudyStore:
         )
         async with self._sessions() as session:
             return list((await session.scalars(statement)).all())
+
+    async def has_seen_quiz(self, student_id: uuid.UUID, quiz: str) -> bool:
+        statement = select(QuizPost.id).where(
+            QuizPost.student_id == student_id, QuizPost.quiz == quiz
+        )
+        async with self._sessions() as session:
+            return await session.scalar(statement.limit(1)) is not None
 
     async def review_counts(self, student_id: uuid.UUID, today: date) -> tuple[int, int]:
         statement = select(ReviewSchedule.due_date).where(ReviewSchedule.student_id == student_id)

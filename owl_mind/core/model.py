@@ -27,8 +27,9 @@ COMPONENT_TIERS: dict[str, ModelTier] = {
     "memory:write": ModelTier.SMALL,
     "materials:topics": ModelTier.SMALL,
     "handoff:improve": ModelTier.SMALL,
-    # Evaluation only: the judge of the adversarial set.
-    "integrity_judge": ModelTier.LARGE,
+    # Evaluation only: the judge of the eval answers. Small, so the yardstick stays the same when
+    # the large tier's model changes in an experiment (M4-D).
+    "integrity_judge": ModelTier.SMALL,
 }
 
 

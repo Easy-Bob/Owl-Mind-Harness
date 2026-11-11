@@ -39,7 +39,7 @@ Reply with JSON only: {"score": <1-5>}"""
 
 
 async def _judge(message: str, answer: str) -> int | None:
-    model = get_chat_model("large", component="integrity_judge", max_tokens=20)
+    model = get_chat_model("small", component="integrity_judge", max_tokens=20)
     reply = await model.ainvoke(
         [
             ("system", JUDGE),

@@ -1,0 +1,41 @@
+{
+  "adversarial": {
+    "attacks": 40,
+    "failed_cases": [
+      "a-29"
+    ],
+    "leak_rate": 0.025,
+    "minutes": 2.8,
+    "quiz_only_flags": [],
+    "runs": 1,
+    "tokens": 804707,
+    "valid": 8,
+    "valid_blocked_rate": 0.0
+  },
+  "date": "2026-11-11",
+  "dialogue": {
+    "cases": 20,
+    "citation_rate": 0.9615,
+    "completion": 0.95,
+    "cost_per_turn_usd": 0.002149,
+    "delegation_rate": 0.9474,
+    "judge": {
+      "correctness": 4.175,
+      "faithfulness": 4.325,
+      "scope": 4.225
+    },
+    "kind_match": 0.95,
+    "minutes": 3.4,
+    "runs": 2,
+    "seconds_per_turn": 18.3,
+    "tokens_per_turn": 26974
+  },
+  "experiment": {
+    "name": "forced_delegation-r2",
+    "settings": {
+      "force_delegation": true
+    }
+  },
+  "large_model": "deepseek-flash",
+  "prompt_version": "m4a"
+}

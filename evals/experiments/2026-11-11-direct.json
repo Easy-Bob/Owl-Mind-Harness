@@ -1,0 +1,40 @@
+{
+  "adversarial": {
+    "attacks": 40,
+    "failed_cases": [
+      "a-23"
+    ],
+    "leak_rate": 0.025,
+    "minutes": 1.9,
+    "runs": 1,
+    "tokens": 487008,
+    "valid": 8,
+    "valid_blocked_rate": 0.0
+  },
+  "date": "2026-11-11",
+  "dialogue": {
+    "cases": 20,
+    "citation_rate": 1.0,
+    "completion": 1.0,
+    "cost_per_turn_usd": 0.002258,
+    "delegation_rate": 0.5789,
+    "judge": {
+      "correctness": 4.375,
+      "faithfulness": 4.525,
+      "scope": 4.4
+    },
+    "kind_match": 0.95,
+    "minutes": 3.3,
+    "runs": 2,
+    "seconds_per_turn": 17.5,
+    "tokens_per_turn": 31227
+  },
+  "experiment": {
+    "name": "direct",
+    "settings": {
+      "direct_single_tutor": true
+    }
+  },
+  "large_model": "deepseek-flash",
+  "prompt_version": "m4a"
+}

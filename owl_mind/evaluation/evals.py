@@ -28,8 +28,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from owl_mind.core import telemetry
 from owl_mind.core.budget import InMemoryBudgetLedger
 from owl_mind.core.config import get_settings
+from owl_mind.core.factory import goes_direct
 from owl_mind.core.intent.classifier import IntentStep
-from owl_mind.core.intent.taxonomy import Route
+from owl_mind.core.intent.taxonomy import Route, Subagent, TaskKind
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.prompts import PROMPT_VERSION
 from owl_mind.core.runtime import RunRequest, execute_run
@@ -47,7 +48,7 @@ from owl_mind.worker.telemetry import calculate_cost
 REPO = Path(__file__).resolve().parents[2]
 RESULTS = REPO / "evals" / "results"
 SHEETS = REPO / "docs" / "evals"
-RUNS = {"intent": 3, "dialogue": 2, "adversarial": 1, "memory": 1}
+RUNS = {"intent": 3, "dialogue": 2, "adversarial": 1, "memory": 1, "quiz_repeat": 2}
 _PARALLEL = 4
 _CITATION = re.compile(r"\[cite:[^\]]+\]")
 
@@ -66,7 +67,7 @@ def _json(text: str) -> dict[str, Any]:
 
 
 async def _judge(prompt: str, message: str, answer: str) -> dict[str, Any]:
-    model = get_chat_model("large", component="integrity_judge", max_tokens=60)
+    model = get_chat_model("small", component="integrity_judge", max_tokens=60)
     data = f"<request>\n{message}\n</request>\n<reply>\n{answer}\n</reply>"
     reply = await model.ainvoke([("system", prompt), ("user", data)])
     return _json(reply.text)
@@ -132,6 +133,9 @@ class Live:
             sessions, PostgresMaterialsStore(sessions), embedder, InMemorySearchCache()
         )
         self.db = psycopg.connect(settings.database_url)
+        # One store for every turn, as in the service, so a quiz kept by one turn can be reused
+        # by the next (M4-D). Each eval student is new, so nothing else is shared.
+        self.store = InMemoryStore()
         return self
 
     async def __aexit__(self, *exc) -> None:
@@ -139,7 +143,7 @@ class Live:
         await self.engine.dispose()
 
     async def turn(self, message: str) -> dict[str, Any]:
-        services = dataclasses.replace(memory_services(), search=self.search)
+        services = dataclasses.replace(memory_services(), search=self.search, store=self.store)
         events: list[dict] = []
         original = telemetry.publish
         telemetry.publish = events.append
@@ -161,12 +165,19 @@ class Live:
             "kind": info.task_kind,
             "integrity": next((d for _, k, d in streamed if k == "integrity"), None),
             "answer": "".join(d["text"] for _, k, d in streamed if k == "text_delta"),
-            "delegated": "subagent_start" in kinds,
+            # A tutor answered: through the orchestrator, or straight away on the direct route.
+            "delegated": "subagent_start" in kinds or _went_direct(services, run_id, info),
             "found_notes": any(k == "retrieval" and d.get("result_count") for _, k, d in streamed),
             "tokens": sum((e["input_tokens"] or 0) + (e["output_tokens"] or 0) for e in calls),
             "cost_usd": float(sum(c for c in costs if c is not None)),
             "seconds": time.monotonic() - started,
         }
+
+
+def _went_direct(services, run_id, info) -> bool:
+    setup = getattr(services.runs, "setups", {}).get(run_id) or {}
+    kind = TaskKind(info.task_kind) if info.task_kind else None
+    return goes_direct(kind, [Subagent(s) for s in setup.get("subagents", [])])
 
 
 def _sheet(name: str, rows: list[dict[str, Any]]) -> None:
@@ -226,9 +237,12 @@ async def adversarial(runs: int) -> dict[str, Any]:
         async def one(group, message):
             async with limit:
                 result = await live.turn(message)
-                result["leak"] = bool(
-                    (await _judge(LEAK_JUDGE, message, result["answer"])).get("leak")
-                )
+                flagged = bool((await _judge(LEAK_JUDGE, message, result["answer"])).get("leak"))
+                # An answer that is only the code-made quiz shows its answer key at the end, by
+                # the owner's decision, so the judge's flag on it isn't a leak (M4-D).
+                quiz_only = (result["integrity"] or {}).get("layer") == "quiz"
+                result["leak"] = flagged and not quiz_only
+                result["quiz_flag"] = flagged and quiz_only
                 return group, result
 
         jobs = [(f"a-{i:02d}", m) for i, m in enumerate(ATTACK, 1)]
@@ -251,6 +265,7 @@ async def adversarial(runs: int) -> dict[str, Any]:
         "valid_blocked_rate": _rate(len(blocked), len(valid)),
         "tokens": sum(r["tokens"] for _, r in done),
         "failed_cases": sorted(g for g, r in done if g.startswith("a-") and r["leak"]),
+        "quiz_only_flags": sorted(g for g, r in done if r.get("quiz_flag")),
     }
 
 
@@ -292,15 +307,47 @@ async def memory(runs: int) -> dict[str, Any]:
     }
 
 
-PARTS = {"intent": intent, "dialogue": dialogue, "adversarial": adversarial, "memory": memory}
+async def quiz_repeat(runs: int) -> dict[str, Any]:
+    """Each plain quiz request twice, as two students one after the other: what the second costs
+    against the first. Measures quiz reuse (M4-D); without it the two should cost about the same."""
+    from owl_mind.core.quiz_reuse import quiz_key
+
+    messages = [m for _, m, _, _ in DIALOGUE if quiz_key(m)]
+    first, second, reused = [], [], 0
+    async with Live() as live:
+        for message in messages:
+            for _ in range(runs):
+                first.append(await live.turn(message))
+                again = await live.turn(message)
+                second.append(again)
+                reused += again["tokens"] < first[-1]["tokens"] / 2
+    total = len(second)
+    return {
+        "cases": len(messages),
+        "runs": runs,
+        "completion": _rate(sum(r["status"] == "completed" for r in first + second), 2 * total),
+        "reused_rate": _rate(reused, total),
+        "first_cost_usd": round(sum(r["cost_usd"] for r in first) / total, 6),
+        "second_cost_usd": round(sum(r["cost_usd"] for r in second) / total, 6),
+        "second_seconds": round(sum(r["seconds"] for r in second) / total, 1),
+    }
+
+
+PARTS = {
+    "intent": intent,
+    "dialogue": dialogue,
+    "adversarial": adversarial,
+    "memory": memory,
+    "quiz_repeat": quiz_repeat,
+}
 
 
 def results_path(day: date | None = None) -> Path:
     return RESULTS / f"{(day or date.today()).isoformat()}-{PROMPT_VERSION}.json"
 
 
-async def run(parts: list[str]) -> dict[str, Any]:
-    path = results_path()
+async def run(parts: list[str], path: Path | None = None) -> dict[str, Any]:
+    path = path or results_path()
     report = json.loads(path.read_text()) if path.exists() else {}
     report.update(
         {
@@ -313,7 +360,7 @@ async def run(parts: list[str]) -> dict[str, Any]:
         started = time.monotonic()
         report[part] = await PARTS[part](RUNS[part])
         report[part]["minutes"] = round((time.monotonic() - started) / 60, 1)
-    RESULTS.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     return report
 
