@@ -61,6 +61,8 @@ class Services:
     approvals: Any = None
     # A MemoryWriter, for the background job. Reading memory needs only the store.
     memory: Any = None
+    # A RedisRunQueue: runs go to workers (M4-B). None runs them in this process, as in tests.
+    queue: Any = None
 
 
 @dataclass(frozen=True)

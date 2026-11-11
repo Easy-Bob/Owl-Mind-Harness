@@ -31,7 +31,6 @@ from owl_mind.forum.accounts import PostgresAccountStore as PostgresForumAccount
 from owl_mind.forum.github import GitHubForum
 from owl_mind.forum.handoff import HandoffService
 from owl_mind.forum.improve import Improver
-from owl_mind.forum.replies import ReplyPoller
 from owl_mind.forum.store import PostgresHandoffStore
 from owl_mind.materials.embedding import FastEmbedEmbedder
 from owl_mind.materials.ingest import Ingestor
@@ -46,11 +45,11 @@ from owl_mind.services.models import sqlalchemy_url
 from owl_mind.services.run_events import RunEventLog
 from owl_mind.services.run_store import PostgresRunStore
 from owl_mind.services.study_store import PostgresStudyStore
+from owl_mind.worker.jobs import expire_approvals, jobs  # noqa: F401  Imported from here.
+from owl_mind.worker.runs import RedisRunQueue
 
 # Longer than the stream's idle wait, so that waiting isn't mistaken for a lost connection.
 _REDIS_TIMEOUT_SECONDS = 15
-_HANDOFF_RETRY_SECONDS = 60
-_APPROVAL_CHECK_SECONDS = 300
 logger = logging.getLogger(__name__)
 
 
@@ -78,51 +77,18 @@ def _forum_accounts(settings, sessions) -> ForumAccounts | None:
     return ForumAccounts(PostgresForumAccountStore(sessions), oauth, cipher)
 
 
-async def expire_approvals(services: Services) -> int:
-    """Expired approvals count as rejected: their runs stop and free the student's slot."""
-    runs = await services.approvals.expire_due()
-    for run_id in runs:
-        await services.runs.record_event(
-            run_id, "approval:expired", "approval", {"step": "expired"}
-        )
-        await services.runs.set_run_status(run_id, "stopped")
-    return len(runs)
+async def _in_process_jobs(services: Services) -> None:
+    """With no workers, as in tests and single-process development, the API runs the jobs."""
 
+    async def loop(interval: float, job) -> None:
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await job()
+            except Exception as exc:
+                logger.warning("Background job failed: %s", type(exc).__name__)
 
-async def _approval_jobs(services: Services) -> None:
-    while True:
-        await asyncio.sleep(_APPROVAL_CHECK_SECONDS)
-        try:
-            await expire_approvals(services)
-        except Exception as exc:
-            logger.warning("Approval job failed: %s", type(exc).__name__)
-
-
-async def _memory_jobs(services: Services) -> None:
-    """Writes long-term memory for chats idle for 30 minutes. Moves to workers in M4-B."""
-    while True:
-        await asyncio.sleep(_APPROVAL_CHECK_SECONDS)
-        try:
-            await services.memory.run_due()
-        except Exception as exc:
-            logger.warning("Memory job failed: %s", type(exc).__name__)
-
-
-async def _forum_jobs(services: Services) -> None:
-    """Retries approved posts and checks posts for replies. Moves to workers in M4-B."""
-    forum = services.handoffs.forum
-    handoffs = services.handoffs
-    poller = (
-        ReplyPoller(handoffs.store, forum, events=handoffs.events) if forum is not None else None
-    )
-    while True:
-        await asyncio.sleep(_HANDOFF_RETRY_SECONDS)
-        try:
-            await services.handoffs.retry_pending()
-            if poller is not None:
-                await poller.poll_due()
-        except Exception as exc:
-            logger.warning("Forum job failed: %s", type(exc).__name__)
+    await asyncio.gather(*(loop(interval, job) for _, interval, job in jobs(services)))
 
 
 @asynccontextmanager
@@ -182,6 +148,8 @@ async def _production_services() -> AsyncIterator[Services]:
                 budgets=budgets,
                 approvals=PostgresApprovalStore(sessions),
                 memory=memory,
+                # Runs go to workers (M4-B): uv run python -m owl_mind.worker.runs
+                queue=RedisRunQueue(client),
                 # Only with a model key: without one, the button is hidden.
                 improver=Improver(handoffs.store, get_chat_model, events)
                 if settings.deepseek_api_key
@@ -203,27 +171,19 @@ def create_app(services_factory: Callable = _production_services) -> FastAPI:
         app.state.run_tasks = set()
         async with services_factory() as services:
             app.state.services = services
-            # One process until M4-B, so any unfinished run was left by a restart.
-            await services.runs.fail_unfinished_runs()
             if services.ingestor is not None:
                 # The file is only held in memory, so an interrupted import can't resume.
                 await services.ingestor.store.fail_unfinished_jobs()
-            retrying = None
-            expiring = (
-                asyncio.create_task(_approval_jobs(services))
-                if services.approvals is not None
-                else None
-            )
-            remembering = (
-                asyncio.create_task(_memory_jobs(services)) if services.memory is not None else None
-            )
-            if services.handoffs is not None:
-                await services.handoffs.store.fail_unfinished()
-                retrying = asyncio.create_task(_forum_jobs(services))
+            in_process = None
+            if services.queue is None:
+                # No workers: any unfinished run was left by this process, and the jobs run here.
+                await services.runs.fail_unfinished_runs()
+                if services.handoffs is not None:
+                    await services.handoffs.store.fail_unfinished()
+                in_process = asyncio.create_task(_in_process_jobs(services))
             yield
-            for job in (retrying, expiring, remembering):
-                if job is not None:
-                    job.cancel()
+            if in_process is not None:
+                in_process.cancel()
             for task in list(app.state.run_tasks):
                 task.cancel()
             await asyncio.gather(*app.state.run_tasks, return_exceptions=True)
