@@ -66,13 +66,7 @@ DASHBOARDS = [
             ),
             (
                 "Seconds since each job last succeeded",
-                [
-                    (
-                        "time() - max by (job_name) (label_replace(owl_job_last_success_seconds, "
-                        '"job_name", "$1", "job", "(.*)"))',
-                        "{{job_name}}",
-                    )
-                ],
+                [("time() - max by (job_name) (owl_job_last_success_seconds)", "{{job_name}}")],
                 "s",
             ),
             (

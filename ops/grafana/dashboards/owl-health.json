@@ -131,7 +131,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "time() - max by (job_name) (label_replace(owl_job_last_success_seconds, \"job_name\", \"$1\", \"job\", \"(.*)\"))",
+          "expr": "time() - max by (job_name) (owl_job_last_success_seconds)",
           "legendFormat": "{{job_name}}",
           "datasource": {
             "type": "prometheus",

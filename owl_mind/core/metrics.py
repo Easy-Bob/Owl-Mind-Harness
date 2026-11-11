@@ -31,8 +31,9 @@ DEAD_LETTERS = Counter("owl_dead_letters_total", "Runs sent to the dead letters"
 TAKEOVERS = Counter("owl_takeovers_total", "Runs taken over from a stopped worker", ["step"])
 
 WORKER_HEARTBEAT = Gauge("owl_worker_heartbeat_seconds", "When this worker last reported")
-JOB_RUNS = Counter("owl_job_runs_total", "Background job passes", ["job", "outcome"])
-JOB_LAST_SUCCESS = Gauge("owl_job_last_success_seconds", "When a job last succeeded", ["job"])
+# job_name, not job: Prometheus sets its own job label on every series it scrapes.
+JOB_RUNS = Counter("owl_job_runs_total", "Background job passes", ["job_name", "outcome"])
+JOB_LAST_SUCCESS = Gauge("owl_job_last_success_seconds", "When a job last succeeded", ["job_name"])
 
 BUDGET_STEPS = Counter("owl_budget_steps_total", "Steps of the budget ladder reached", ["step"])
 INTEGRITY = Counter("owl_integrity_total", "Integrity check outcomes", ["result", "layer"])
