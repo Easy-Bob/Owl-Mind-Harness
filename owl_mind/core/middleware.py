@@ -19,6 +19,7 @@ from owl_mind.core import replies
 from owl_mind.core.budget import BudgetStop, RunMeter
 from owl_mind.core.integrity import MAX_CODE_LINES, code_lines
 from owl_mind.core.intent.taxonomy import Subagent, TaskKind
+from owl_mind.services.memory import Memory, profile_line
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +237,7 @@ class ContextMiddleware(AgentMiddleware):
         self.tool_calls = tool_calls
         self.seconds = seconds
 
-    def block(self, request: ModelRequest) -> str:
+    def block(self, request: ModelRequest, about: str | None = None) -> str:
         context = getattr(request.runtime, "context", None)
         today = getattr(context, "today", None)
         lines = [
@@ -246,10 +247,24 @@ class ContextMiddleware(AgentMiddleware):
             f"- Tutors available: {', '.join(self.tutors) or 'none'}",
             f"- Limits: at most {self.tool_calls} tool calls and {self.seconds} seconds",
         ]
+        if about:
+            # From long-term memory, written by code from the stored profile.
+            lines.append(f"- This student: {about}")
         return "\n".join(lines)
 
-    def _with_block(self, request: ModelRequest) -> ModelRequest:
-        block = self.block(request)
+    async def _about(self, request: ModelRequest) -> str | None:
+        store = getattr(request.runtime, "store", None)
+        student = getattr(getattr(request.runtime, "context", None), "student_id", None)
+        if store is None or student is None:
+            return None
+        try:
+            return profile_line(await Memory(store).profile(student))
+        except Exception as exc:
+            logger.warning("Memory unavailable: %s", type(exc).__name__)
+            return None
+
+    def _with_block(self, request: ModelRequest, about: str | None = None) -> ModelRequest:
+        block = self.block(request, about)
         current = request.system_message
         if current is None:
             return request.override(system_message=SystemMessage(block))
@@ -265,7 +280,7 @@ class ContextMiddleware(AgentMiddleware):
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelResponse]]
     ) -> ModelResponse:
-        return await handler(self._with_block(request))
+        return await handler(self._with_block(request, await self._about(request)))
 
 
 class BudgetMiddleware(AgentMiddleware):

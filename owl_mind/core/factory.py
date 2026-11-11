@@ -27,6 +27,7 @@ from owl_mind.core.middleware import JoinAnswerMiddleware, ReportCheckMiddleware
 from owl_mind.core.model import ModelTier, get_chat_model
 from owl_mind.core.subagents import TUTORS
 from owl_mind.tools.context import RunContext
+from owl_mind.tools.memory import search_memory
 from owl_mind.tools.planner import get_due_topics
 
 _ORCHESTRATOR_MAX_TOKENS = 1200
@@ -151,7 +152,7 @@ def build_owl_agent(
             component="orchestrator",
             max_tokens=_ORCHESTRATOR_MAX_TOKENS,
         ),
-        tools=[get_due_topics],
+        tools=[get_due_topics, search_memory],
         system_prompt=prompts.ORCHESTRATOR,
         subagents=specs,
         middleware=[*join, *checks(orchestrator=True), *report_check, *todos],

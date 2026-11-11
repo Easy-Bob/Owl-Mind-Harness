@@ -17,6 +17,7 @@ from owl_mind.core import replies
 from owl_mind.core.events import TERMINAL_KINDS
 from owl_mind.core.runtime import RunRequest, Services, course_topics, execute_run, read_history
 from owl_mind.core.telemetry import record_activity
+from owl_mind.services.memory import Memory
 from owl_mind.services.run_store import FINISHED, WAITING, ActiveRunExists
 
 logger = logging.getLogger(__name__)
@@ -258,3 +259,25 @@ async def help_page(student: Student, services: ServicesDep) -> dict:
         "cannot": replies.CANNOT,
         "topics": await course_topics(services),
     }
+
+
+# -- long-term memory -------------------------------------------------------------
+
+
+@router.get("/memory")
+async def my_memory(student: Student, services: ServicesDep) -> dict:
+    """What the tutors remember about this student, for them to check."""
+    memory = Memory(services.store)
+    return {
+        "profile": await memory.profile(student),
+        "episodes": [
+            {"key": e.key, "summary": e.summary, "written_at": e.written_at}
+            for e in await memory.episodes(student)
+        ],
+    }
+
+
+@router.delete("/memory", status_code=204)
+async def forget_me(student: Student, services: ServicesDep) -> None:
+    """Delete the student's profile and every past-session summary."""
+    await Memory(services.store).delete_all(student)

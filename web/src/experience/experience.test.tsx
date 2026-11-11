@@ -332,6 +332,41 @@ describe("App", () => {
     expect(calls.some((call) => call.key === "POST /threads")).toBe(false);
   });
 
+  it("shows what tutors remember and deletes it after a second click", async () => {
+    let deleted = false;
+    const calls = fakeServer({
+      ...loggedIn,
+      "GET /memory": () => ({
+        body: deleted
+          ? { profile: null, episodes: [] }
+          : {
+              profile: { strengths: ["Hashing"], weak_topics: ["Chernoff bounds"], style: "" },
+              episodes: [
+                { key: "/episodes/a.md", summary: "Studied tail bounds.", written_at: "2026-11-10T00:00:00Z" },
+              ],
+            },
+      }),
+      "DELETE /memory": () => {
+        deleted = true;
+        return { status: 204 };
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "What tutors remember" }));
+    const panel = await screen.findByRole("region", { name: "What tutors remember" });
+    expect(panel).toHaveTextContent("Working on: Chernoff bounds");
+    expect(panel).toHaveTextContent("2026-11-10 Studied tail bounds.");
+
+    await user.click(screen.getByRole("button", { name: "Delete my memory" }));
+    expect(calls.some((c) => c.key === "DELETE /memory")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Delete everything" }));
+
+    await waitFor(() => expect(panel).toHaveTextContent("Nothing yet."));
+    expect(calls.filter((c) => c.key === "DELETE /memory")).toHaveLength(1);
+  });
+
   it("shows what can be asked and the course topics in an empty chat", async () => {
     fakeServer({
       ...loggedIn,

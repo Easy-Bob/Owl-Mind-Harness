@@ -25,7 +25,8 @@ async def main(action: str, thread_id: str) -> None:
         graph = build_graph(persistence.checkpointer)
         if action == "write":
             await graph.ainvoke({"messages": [("user", "hello")]}, config(thread_id))
-            await persistence.store.aput(namespace, thread_id, {"text": "weak on recursion"})
+            # The file format memory uses: the index embeds "content".
+            await persistence.store.aput(namespace, thread_id, {"content": "weak on recursion"})
         else:
             state = await graph.aget_state(config(thread_id))
             item = await persistence.store.aget(namespace, thread_id)

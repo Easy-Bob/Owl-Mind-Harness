@@ -8,6 +8,7 @@ from owl_mind.core import prompts
 from owl_mind.core.intent.taxonomy import Subagent
 from owl_mind.tools.concept import get_prerequisites
 from owl_mind.tools.materials import materials_search
+from owl_mind.tools.memory import search_memory
 from owl_mind.tools.planner import (
     commit_study_plan,
     get_due_topics,
@@ -37,6 +38,7 @@ TOOL_SCOPES: dict[Subagent, tuple[str, ...]] = {
         "propose_study_plan",
         "commit_study_plan",
         "reset_progress",
+        "search_memory",
     ),
     Subagent.QUIZ_MASTER: ("materials_search", "post_quiz"),
 }
@@ -63,6 +65,7 @@ TUTORS: dict[Subagent, TutorSpec] = {
             propose_study_plan,
             commit_study_plan,
             reset_progress,
+            search_memory,
         ),
         800,
     ),

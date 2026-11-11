@@ -35,6 +35,10 @@ export type Handoff = {
   // AI rewrites left for this draft. 0 hides the button.
   improve_left?: number;
 };
+export type MemoryView = {
+  profile: { strengths: string[]; weak_topics: string[]; style: string } | null;
+  episodes: { key: string; summary: string; written_at: string }[];
+};
 export type Help = {
   can_help_with: { what: string; example: string }[];
   cannot: string;
@@ -91,9 +95,9 @@ function errorMessage(status: number, data: { detail?: unknown } | null): string
   return "Something went wrong on the server. Please try again.";
 }
 
-export async function request<T>(path: string, body?: unknown): Promise<T> {
+export async function request<T>(path: string, body?: unknown, method?: string): Promise<T> {
   const response = await fetch(path, {
-    method: body === undefined ? "GET" : "POST",
+    method: method ?? (body === undefined ? "GET" : "POST"),
     headers: body === undefined ? undefined : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   }).catch(() => {
@@ -129,6 +133,8 @@ export const api = {
   unreadReplies: () => request<Record<string, number>>("/handoffs/unread"),
   markRepliesSeen: (id: string) => request<void>(`/handoffs/${id}/seen`, {}),
   help: () => request<Help>("/help"),
+  memory: () => request<MemoryView>("/memory"),
+  deleteMemory: () => request<void>("/memory", undefined, "DELETE"),
   citations: (ids: string[]) =>
     request<Record<string, Citation | null>>(
       `/citations?ids=${encodeURIComponent(ids.join(","))}`,

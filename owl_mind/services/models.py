@@ -257,3 +257,17 @@ class Approval(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MemoryWrite(Base):
+    """When a chat's long-term memory was last written, and from what."""
+
+    __tablename__ = "memory_writes"
+
+    thread_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("threads.id", ondelete="CASCADE"), primary_key=True
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("students.id"))
+    input_hash: Mapped[str | None] = mapped_column(Text)
+    written_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

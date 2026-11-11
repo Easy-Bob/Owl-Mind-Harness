@@ -25,7 +25,7 @@ from owl_mind.core.events import RedisEventBus
 from owl_mind.core.intent.classifier import IntentStep
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.persistence import open_persistence
-from owl_mind.core.runtime import Services
+from owl_mind.core.runtime import Services, read_history
 from owl_mind.forum.accounts import ForumAccounts, GitHubOAuth, TokenCipher
 from owl_mind.forum.accounts import PostgresAccountStore as PostgresForumAccountStore
 from owl_mind.forum.github import GitHubForum
@@ -41,6 +41,7 @@ from owl_mind.materials.topics import TopicNamer
 from owl_mind.services.accounts import PostgresAccountStore, RedisLoginLimiter
 from owl_mind.services.admin_store import PostgresAdminStore
 from owl_mind.services.approvals import PostgresApprovalStore
+from owl_mind.services.memory import Memory, MemoryWriter, PostgresMemoryLog
 from owl_mind.services.models import sqlalchemy_url
 from owl_mind.services.run_events import RunEventLog
 from owl_mind.services.run_store import PostgresRunStore
@@ -97,6 +98,16 @@ async def _approval_jobs(services: Services) -> None:
             logger.warning("Approval job failed: %s", type(exc).__name__)
 
 
+async def _memory_jobs(services: Services) -> None:
+    """Writes long-term memory for chats idle for 30 minutes. Moves to workers in M4-B."""
+    while True:
+        await asyncio.sleep(_APPROVAL_CHECK_SECONDS)
+        try:
+            await services.memory.run_due()
+        except Exception as exc:
+            logger.warning("Memory job failed: %s", type(exc).__name__)
+
+
 async def _forum_jobs(services: Services) -> None:
     """Retries approved posts and checks posts for replies. Moves to workers in M4-B."""
     forum = services.handoffs.forum
@@ -139,7 +150,21 @@ async def _production_services() -> AsyncIterator[Services]:
         events=events,
     )
     try:
-        async with open_persistence(settings.database_url) as persistence:
+        # The store embeds file text with the same model as course search, for memory search.
+        async with open_persistence(settings.database_url, embed=embedder.embed) as persistence:
+            budgets = RedisBudgetLedger(client)
+            memory = (
+                MemoryWriter(
+                    Memory(persistence.store),
+                    PostgresMemoryLog(sessions),
+                    lambda thread_id: read_history(persistence.checkpointer, thread_id),
+                    get_chat_model,
+                    budgets,
+                    record=runs.record_event,
+                )
+                if settings.deepseek_api_key
+                else None
+            )
             yield Services(
                 admin=PostgresAdminStore(sessions),
                 accounts=PostgresAccountStore(sessions),
@@ -154,8 +179,9 @@ async def _production_services() -> AsyncIterator[Services]:
                 search=search,
                 handoffs=handoffs,
                 forum_accounts=forum_accounts,
-                budgets=RedisBudgetLedger(client),
+                budgets=budgets,
                 approvals=PostgresApprovalStore(sessions),
+                memory=memory,
                 # Only with a model key: without one, the button is hidden.
                 improver=Improver(handoffs.store, get_chat_model, events)
                 if settings.deepseek_api_key
@@ -188,11 +214,14 @@ def create_app(services_factory: Callable = _production_services) -> FastAPI:
                 if services.approvals is not None
                 else None
             )
+            remembering = (
+                asyncio.create_task(_memory_jobs(services)) if services.memory is not None else None
+            )
             if services.handoffs is not None:
                 await services.handoffs.store.fail_unfinished()
                 retrying = asyncio.create_task(_forum_jobs(services))
             yield
-            for job in (retrying, expiring):
+            for job in (retrying, expiring, remembering):
                 if job is not None:
                     job.cancel()
             for task in list(app.state.run_tasks):

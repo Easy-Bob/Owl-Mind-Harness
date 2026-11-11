@@ -319,6 +319,15 @@ textarea:focus-visible {
   align-items: center;
 }
 
+.memory {
+  margin: 8px 0;
+}
+
+.memory-episodes {
+  padding-left: 18px;
+  font-size: 0.9em;
+}
+
 .help {
   max-width: 760px;
   margin: 0 auto;
