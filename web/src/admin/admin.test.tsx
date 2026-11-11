@@ -202,7 +202,24 @@ describe("Admin mode", () => {
         totals: { calls: 3, cost_usd: 0.5, unknown_usage: 0 },
         cache_hit_rate: 0.25,
         by_component: [
-          { name: "intent", calls: 3, input_tokens: 30, output_tokens: 6, cost_usd: 0.5, unknown_usage: 0 },
+          {
+            name: "intent",
+            calls: 3,
+            input_tokens: 30,
+            output_tokens: 6,
+            cost_usd: 0.5,
+            unknown_usage: 0,
+            cache_hit_rate: 0.8,
+          },
+          {
+            name: "summarization",
+            calls: 1,
+            input_tokens: null,
+            output_tokens: null,
+            cost_usd: null,
+            unknown_usage: 1,
+            cache_hit_rate: null,
+          },
         ],
         outcomes: [{ name: "success", calls: 3 }],
         top_runs: [{ run_id: "r1", cost_usd: 0.5, calls: 3 }],
@@ -217,6 +234,11 @@ describe("Admin mode", () => {
     expect(await screen.findByText("25.0%")).toBeVisible();
     expect(screen.getByText("success: 3")).toBeVisible();
     expect(screen.getByRole("cell", { name: "intent" })).toBeVisible();
+    // Cache hits per component, and unknown rather than 0 when nothing reported them.
+    const intentRow = screen.getByRole("cell", { name: "intent" }).closest("tr");
+    expect(intentRow).toHaveTextContent("80%");
+    const summaryRow = screen.getByRole("cell", { name: "summarization" }).closest("tr");
+    expect(summaryRow).toHaveTextContent("unknown");
     expect(screen.getByText(/r1: \$0\.500000, 3 calls/)).toBeVisible();
   });
 

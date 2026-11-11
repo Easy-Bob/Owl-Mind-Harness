@@ -1,5 +1,6 @@
 """Offline: the checks around every agent step, in the real agent loop with scripted replies."""
 
+import asyncio
 import json
 
 import pytest
@@ -38,19 +39,23 @@ def tool_messages(run: Run, request: int) -> list[str]:
 # -- fan-out ----------------------------------------------------------------
 
 
-def test_task_calls_beyond_the_cap_are_refused_and_the_turn_finishes():
-    replies = []
-    for number in range(MAX_TASK_CALLS):
-        replies += [task("concept_tutor"), say(f"tutor answer {number}")]
-    replies += [task("concept_tutor"), task("concept_tutor"), say("final answer")]
-    run = Run(*replies)
+def test_task_calls_beyond_the_cap_are_refused_and_the_turn_finishes(monkeypatch):
+    # Rewrite mode, so the orchestrator keeps going after both tutors have replied.
+    monkeypatch.setenv("COMPOSITE_ANSWER", "rewrite")
+    get_settings.cache_clear()
+    run = Run(
+        task("concept_tutor"), say("one"),
+        task("quiz_master"), say("two"),
+        task("concept_tutor"), say("three"),
+        task("quiz_master"),
+        say("final answer"),
+    )  # fmt: skip
 
-    result = run.invoke(TaskKind.LEARN, [Subagent.CONCEPT_TUTOR])
+    result = run.invoke(TaskKind.COMPOSITE, [Subagent.CONCEPT_TUTOR, Subagent.QUIZ_MASTER])
 
     results = tool_results(result)
-    assert results[:MAX_TASK_CALLS] == [f"tutor answer {n}" for n in range(MAX_TASK_CALLS)]
-    assert all("used its 3 tutor calls" in text for text in results[MAX_TASK_CALLS:])
-    assert len(results) == MAX_TASK_CALLS + 2
+    assert results[:MAX_TASK_CALLS] == ["one", "two", "three"]
+    assert "used its 3 tutor calls" in results[MAX_TASK_CALLS]
     assert result["messages"][-1].content == "final answer"
 
 
@@ -70,7 +75,7 @@ def test_retries_on_one_tutor_cannot_use_up_the_other_tutors_call():
 
     results = tool_results(result)
     assert results[:2] == ["weak answer", "better answer"]
-    assert "Keep a call for quiz_master" in results[2]
+    assert "already asked twice" in results[2]
     assert results[3] == "quiz"
 
 
@@ -93,17 +98,20 @@ def test_once_both_tutors_ran_the_spare_call_can_retry_either(monkeypatch):
     assert tool_results(result) == ["explanation", "weak quiz", "better quiz"]
 
 
-def test_a_one_tutor_turn_can_use_all_three_calls():
+def test_a_tutor_gets_one_retry_and_then_the_orchestrator_answers_with_what_it_has():
     run = Run(
-        task("concept_tutor"), say("part 1"),
-        task("concept_tutor"), say("part 2"),
-        task("concept_tutor"), say("part 3"),
-        say("final"),
+        task("concept_tutor"), say("failed: no notes"),
+        task("concept_tutor"), say("failed again"),
+        task("concept_tutor"),
+        say("Here's what I can say; the notes didn't cover the rest."),
     )  # fmt: skip
 
     result = run.invoke(TaskKind.LEARN, [Subagent.CONCEPT_TUTOR])
 
-    assert tool_results(result) == ["part 1", "part 2", "part 3"]
+    results = tool_results(result)
+    assert results[:2] == ["failed: no notes", "failed again"]
+    assert "already asked twice" in results[2] and "what's missing" in results[2]
+    assert result["messages"][-1].content.startswith("Here's what I can say")
 
 
 def test_a_tutor_the_intent_step_chose_is_allowed():
@@ -180,20 +188,62 @@ def test_a_failing_tool_becomes_a_fixed_message_and_the_run_continues(caplog):
 # -- context block ----------------------------------------------------------
 
 
-def test_every_agent_gets_the_code_written_context_block_after_its_prompt():
+def text_of(message: dict) -> str:
+    content = message["content"]
+    return content if isinstance(content, str) else json.dumps(content)
+
+
+def test_every_agent_gets_the_code_written_context_block_as_its_last_message():
     run = Run(task("concept_tutor"), say("tutor answer"), say("final"))
 
-    run.invoke(TaskKind.LEARN, [Subagent.CONCEPT_TUTOR], message="zqx-student-text")
+    result = run.invoke(TaskKind.LEARN, [Subagent.CONCEPT_TUTOR], message="zqx-student-text")
 
     for request in run.fake.requests:
-        system = request["messages"][0]["content"]
-        system = system if isinstance(system, str) else json.dumps(system)
-        assert "## This request" in system
-        assert "- Today: 2026-11-02" in system
-        assert "- Kind of request: learn" in system
-        assert "- Tutors available: concept_tutor" in system
-        assert "zqx-student-text" not in system
-        assert system.index("## This request") > 0
+        last = request["messages"][-1]
+        assert last["role"] == "system"
+        block = text_of(last)
+        assert block.startswith("## This request")
+        assert "- Today: 2026-11-02" in block
+        assert "- Kind of request: learn" in block
+        assert "- Tutors available: concept_tutor" in block
+        assert "zqx-student-text" not in block
+        assert "## This request" not in text_of(request["messages"][0])
+    # Only in the request: the chat's history never holds the block.
+    assert all("## This request" not in str(m.content) for m in result["messages"])
+
+
+def test_the_prompt_beginning_is_identical_for_different_students_and_days():
+    import uuid
+    from datetime import date
+
+    from langchain_core.messages import HumanMessage
+    from langgraph.store.memory import InMemoryStore
+
+    from owl_mind.tools.context import RunContext
+
+    def first_requests(student, today) -> list[dict]:
+        run = Run(task("concept_tutor"), say("tutor answer"), say("final"))
+        agent = factory.build_owl_agent(
+            TaskKind.LEARN,
+            [Subagent.CONCEPT_TUTOR],
+            store=InMemoryStore(),
+            meter=meter(student),
+            get_model=run.get_model,
+        )
+        context = RunContext(student_id=student, store=run.store, today=today)
+        asyncio.run(agent.ainvoke({"messages": [HumanMessage("help me")]}, context=context))
+        return run.fake.requests
+
+    one = first_requests(uuid.UUID(int=1), date(2026, 11, 2))
+    two = first_requests(uuid.UUID(int=2), date(2026, 12, 25))
+
+    # A first request holds no chat yet, so all of it but the block must match.
+    assert one[0]["messages"][:-1] == two[0]["messages"][:-1]
+    for a, b in zip(one, two, strict=True):
+        # The system prompt (with the skills list) and the tools are the cacheable beginning.
+        assert a["messages"][0] == b["messages"][0]
+        assert a.get("tools") == b.get("tools")
+        assert a["messages"][-1] != b["messages"][-1]
 
 
 # -- attached to every agent ------------------------------------------------

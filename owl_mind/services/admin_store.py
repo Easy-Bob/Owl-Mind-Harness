@@ -151,7 +151,8 @@ def _grouped(column: str, join: str = "") -> str:
     return f"""
 SELECT {column} AS name, count(*) AS calls, sum(m.input_tokens) AS input_tokens,
     sum(m.output_tokens) AS output_tokens, sum(m.cost_usd) AS cost_usd,
-    count(*) FILTER (WHERE NOT m.usage_complete) AS unknown_usage
+    count(*) FILTER (WHERE NOT m.usage_complete) AS unknown_usage,
+    sum(m.cache_hit_tokens) AS cache_hit, sum(m.cache_miss_tokens) AS cache_miss
 FROM ops.model_calls m {join} WHERE {_WINDOW}
 GROUP BY 1 ORDER BY sum(m.cost_usd) DESC NULLS LAST, 1
 """
@@ -182,6 +183,12 @@ def safe_event(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
             f"agent_{name}": payload[name] for name in _SAFE_EVENT_FIELDS[kind] if name in payload
         }
     return {field: payload[field] for field in _SAFE_EVENT_FIELDS.get(kind, ()) if field in payload}
+
+
+def _hit_rate(hit: Any, miss: Any) -> float | None:
+    """The share of input tokens billed at the cache price. None, not 0, with no figures."""
+    known = (hit or 0) + (miss or 0)
+    return None if not known else float(hit or 0) / float(known)
 
 
 def _clean(row: Any) -> dict[str, Any]:
@@ -266,7 +273,13 @@ class PostgresAdminStore:
         async with self._sessions() as session:
 
             async def rows(sql: str) -> list[dict[str, Any]]:
-                return [_clean(row) for row in (await session.execute(text(sql), params)).all()]
+                found = [_clean(row) for row in (await session.execute(text(sql), params)).all()]
+                for row in found:
+                    if "cache_hit" in row:
+                        row["cache_hit_rate"] = _hit_rate(
+                            row.pop("cache_hit"), row.pop("cache_miss")
+                        )
+                return found
 
             totals = (await rows(_TOTALS))[0]
             summary = {
@@ -276,11 +289,10 @@ class PostgresAdminStore:
                 "outcomes": await rows(_OUTCOMES),
                 "top_runs": await rows(_TOP_RUNS),
             }
-        hit, miss = totals.pop("cache_hit"), totals.pop("cache_miss")
-        known = (hit or 0) + (miss or 0)
+        rate = totals.pop("cache_hit_rate")
         return {
             "days": days,
             "totals": totals,
-            "cache_hit_rate": None if not known else (hit or 0) / known,
+            "cache_hit_rate": rate,
             **summary,
         }

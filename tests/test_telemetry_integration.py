@@ -139,7 +139,7 @@ def test_model_calls_is_partitioned_with_a_default(db):
 def test_real_model_call_becomes_one_row(client, db):
     drain(client, db)
     run_id = str(uuid.uuid4())
-    model = get_chat_model(ModelTier.SMALL, component="integration")
+    model = get_chat_model(ModelTier.SMALL, component="intent")
     FakeDeepSeek([{"role": "assistant", "content": "hi"}]).attach(model)
 
     model.invoke([HumanMessage("hello")], config={"metadata": {RUN_ID_KEY: run_id}})
@@ -152,7 +152,7 @@ def test_real_model_call_becomes_one_row(client, db):
     ).fetchall()
     assert rows == [
         (
-            "integration",
+            "intent",
             "deepseek-flash",
             USAGE["prompt_tokens"],
             USAGE["completion_tokens"],
@@ -318,7 +318,8 @@ def running_app(monkeypatch):
 
 
 def test_prometheus_and_grafana_see_the_app_metrics(running_app):
-    component = f"prometheus-{uuid.uuid4().hex[:8]}"
+    # Unique, so this test finds its own metric. Any "agent:" name is a small-tier component.
+    component = f"agent:prometheus-{uuid.uuid4().hex[:8]}"
     model = get_chat_model(ModelTier.SMALL, component=component)
     FakeDeepSeek([{"role": "assistant", "content": "hi"}]).attach(model)
     model.invoke([HumanMessage("hello")])

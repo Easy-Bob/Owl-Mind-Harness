@@ -281,6 +281,7 @@ function GroupTable({ title, rows }: { title: string; rows: GroupRow[] }) {
               <th>Input tokens</th>
               <th>Output tokens</th>
               <th>Cost</th>
+              <th>Cache hits</th>
             </tr>
           </thead>
           <tbody>
@@ -291,6 +292,7 @@ function GroupTable({ title, rows }: { title: string; rows: GroupRow[] }) {
                 <td>{usageCell(count(row.input_tokens), row.unknown_usage)}</td>
                 <td>{usageCell(count(row.output_tokens), row.unknown_usage)}</td>
                 <td>{usageCell(usd(row.cost_usd), row.unknown_usage)}</td>
+                <td>{row.cache_hit_rate == null ? unknown : `${Math.round(row.cache_hit_rate * 100)}%`}</td>
               </tr>
             ))}
           </tbody>

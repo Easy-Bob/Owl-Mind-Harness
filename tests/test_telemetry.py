@@ -53,7 +53,7 @@ def events(monkeypatch):
     return published
 
 
-def model_with(fake: FakeDeepSeek, component: str = "test"):
+def model_with(fake: FakeDeepSeek, component: str = "intent"):
     model = get_chat_model(ModelTier.SMALL, component=component)
     fake.attach(model)
     return model
@@ -262,12 +262,12 @@ def test_time_band_converts_other_timezones_to_utc():
 
 
 def test_metrics_endpoint_serves_llm_metrics(events):
-    model_with(FakeDeepSeek([answer()]), component="metrics-test").invoke([HumanMessage("hi")])
+    model_with(FakeDeepSeek([answer()]), component="summarization").invoke([HumanMessage("hi")])
 
     response = TestClient(app).get("/metrics")
 
     assert response.status_code == 200
-    assert 'llm_calls_total{component="metrics-test"' in response.text
-    assert 'llm_tokens_total{component="metrics-test"' in response.text
-    assert 'llm_latency_ms_bucket{component="metrics-test"' in response.text
+    assert 'llm_calls_total{component="summarization"' in response.text
+    assert 'llm_tokens_total{component="summarization"' in response.text
+    assert 'llm_latency_ms_bucket{component="summarization"' in response.text
     assert "telemetry_events_lost_total" in response.text

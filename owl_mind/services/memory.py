@@ -236,6 +236,7 @@ HAVING max(r.created_at) < :idle_since
    AND bool_or(r.route = 'orchestrated')
    AND NOT bool_or(r.status IN ('queued', 'running', 'waiting_approval'))
    AND (m.written_at IS NULL OR m.written_at < max(r.created_at))
+ORDER BY max(r.created_at) DESC
 LIMIT :limit
 """
 

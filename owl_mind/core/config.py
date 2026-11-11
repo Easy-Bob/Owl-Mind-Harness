@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     # How a two-tutor answer is made: "join" puts the tutors' replies together in code, and
     # "rewrite" has the orchestrator write a new answer from them. Compared in M4-D.
     composite_answer: Literal["join", "rewrite"] = "join"
+    # The large tier's model. Changed only with the owner's approval of the M3-F comparison.
+    large_model: Literal["deepseek-flash", "deepseek-v4-pro"] = "deepseek-flash"
     jwt_secret: SecretStr | None = None
     cookie_secure: bool = True
     configured_admins: str = ""

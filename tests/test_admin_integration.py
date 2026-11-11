@@ -269,6 +269,9 @@ def test_summary_groups_match_seeded_calls_and_mark_unknowns():
         0.5,
     )
     assert row["unknown_usage"] == 1
+    # Per component too, from the seeded calls' cache figures.
+    assert row["cache_hit_rate"] is None or 0 <= row["cache_hit_rate"] <= 1
+    assert "cache_hit" not in row and "cache_miss" not in row
     assert {"success", "error"} <= {outcome["name"] for outcome in summary["outcomes"]}
     assert 0 <= summary["cache_hit_rate"] <= 1
     assert "learn" in {group["name"] for group in summary["by_task_kind"]}
