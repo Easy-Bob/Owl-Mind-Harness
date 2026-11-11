@@ -22,6 +22,9 @@ const env = {
   COOKIE_SECURE: "false",
   INVITE_CODES: invite,
   CONFIGURED_ADMINS: adminEmail,
+  // The scripted model plays orchestrated turns; the M4-D savings that skip them are off here.
+  DIRECT_SINGLE_TUTOR: "false",
+  QUIZ_REUSE: "false",
 };
 
 let api: ChildProcess;
