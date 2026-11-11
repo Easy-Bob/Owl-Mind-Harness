@@ -64,6 +64,9 @@ class RunStore(Protocol):
 
     async def fail_unfinished_runs(self) -> int: ...
 
+    async def status_of(self, run_id: uuid.UUID) -> str | None:
+        """For workers, which act for no particular student."""
+
     async def record_event(
         self, run_id: uuid.UUID, key: str, kind: str, payload: dict[str, Any]
     ) -> None:
@@ -115,6 +118,10 @@ class InMemoryRunStore:
 
     async def set_run_setup(self, run_id: uuid.UUID, route: str, task_kind: str | None) -> None:
         self.runs[run_id] = replace(self.runs[run_id], route=route, task_kind=task_kind)
+
+    async def status_of(self, run_id: uuid.UUID) -> str | None:
+        run = self.runs.get(run_id)
+        return run.status if run else None
 
     async def fail_unfinished_runs(self) -> int:
         unfinished = [r.id for r in self.runs.values() if r.status in UNFINISHED]
@@ -176,6 +183,10 @@ class PostgresRunStore:
             has_runs = await session.scalar(select(Run.id).where(Run.thread_id == thread_id))
             if has_runs is None:
                 await session.execute(delete(Thread).where(Thread.id == thread_id))
+
+    async def status_of(self, run_id: uuid.UUID) -> str | None:
+        async with self._sessions() as session:
+            return await session.scalar(select(Run.status).where(Run.id == run_id))
 
     async def get_run(self, student_id: uuid.UUID, run_id: uuid.UUID) -> RunInfo | None:
         statement = (

@@ -189,6 +189,19 @@ def test_an_empty_thread_can_be_removed_but_one_with_runs_is_kept(runs):
     assert in_loop(body) == ["used"]
 
 
+def test_a_worker_reads_any_runs_status(runs):
+    alice = new_student()
+
+    async def body():
+        async with runs() as store:
+            thread = await store.create_thread(alice, "t")
+            run_id = await store.create_run(thread.id)
+            await store.set_run_status(run_id, "running")
+            return await store.status_of(run_id), await store.status_of(uuid.uuid4())
+
+    assert in_loop(body) == ("running", None)
+
+
 def test_run_is_scoped_to_one_student(runs):
     alice, bob = new_student(), new_student()
 

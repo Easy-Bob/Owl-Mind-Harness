@@ -37,7 +37,11 @@ def _title(message: str) -> str:
     return " ".join(message.split())[:_MAX_TITLE_CHARS]
 
 
-def _start(http: Request, services: Services, run: RunRequest) -> None:
+async def _start(http: Request, services: Services, run: RunRequest) -> None:
+    if services.queue is not None:
+        # A worker runs it (M4-B), so a busy or restarting API never holds a run up.
+        await services.queue.enqueue(run)
+        return
     tasks = http.app.state.run_tasks
     task = asyncio.create_task(execute_run(services, run))
     tasks.add(task)
@@ -56,7 +60,7 @@ async def _queue_run(
         await services.events.publish(run_id, "queued", {})
     except Exception:
         pass  # Live events are allowed to be lost. The run still goes ahead.
-    _start(http, services, RunRequest(run_id, thread_id, student, message))
+    await _start(http, services, RunRequest(run_id, thread_id, student, message))
     return run_id
 
 
@@ -200,7 +204,7 @@ async def _decide(
     # A new run continues the paused turn from its checkpoint, with the student's answer.
     resume_run = await services.runs.create_run(found.thread_id)
     await services.approvals.set_resume_run(found.id, resume_run)
-    _start(
+    await _start(
         http,
         services,
         RunRequest(

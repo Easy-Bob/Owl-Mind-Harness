@@ -21,6 +21,8 @@ FORUM_USERS = {
     "owl_mind/api/handoffs.py",
     "owl_mind/api/forum_account.py",
     "owl_mind/core/runtime.py",
+    # The background jobs that retry approved posts and poll for replies (M4-B).
+    "owl_mind/worker/jobs.py",
 }
 
 PROVIDER_MODULES = {
