@@ -8,7 +8,7 @@ import {
   type RequestPage,
   type RunRow,
 } from "./adminApi";
-import { OverviewPage, SavingsPage, UsersPage } from "./AdminReports";
+import { OverviewPage, QualityPage, ReliabilityPage, SavingsPage, UsersPage } from "./AdminReports";
 
 // Null means the provider or the run didn't report it. It must never read as 0.
 const unknown = "unknown";
@@ -57,7 +57,7 @@ function describe(kind: string, data: Record<string, unknown>) {
     .join(", ");
 }
 
-function RequestsPage() {
+function RequestsPage({ openRunId }: { openRunId?: string }) {
   const [query, setQuery] = useState("");
   const [applied, setApplied] = useState("");
   const [route, setRoute] = useState("");
@@ -75,7 +75,7 @@ function RequestsPage() {
 
   useEffect(load, [load]);
 
-  async function open(run: RunRow) {
+  async function open(run: Pick<RunRow, "id">) {
     setError("");
     try {
       setDetail(await adminApi.request(run.id));
@@ -83,6 +83,14 @@ function RequestsPage() {
       setError((caught as Error).message);
     }
   }
+
+  // Opened from another page, such as a dead letter on Reliability. The view is logged.
+  useEffect(() => {
+    if (openRunId) {
+      open({ id: openRunId });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRunId]);
 
   if (detail) {
     return <RequestTimeline detail={detail} onBack={() => setDetail(null)} />;
@@ -358,25 +366,45 @@ const PAGES = [
   ["users", "Users"],
   ["calls", "Model calls"],
   ["savings", "Savings"],
+  ["quality", "Quality"],
+  ["reliability", "Reliability"],
 ] as const;
 
 export function AdminPage() {
   const [page, setPage] = useState<(typeof PAGES)[number][0]>("requests");
+  const [openRunId, setOpenRunId] = useState<string | undefined>();
   return (
     <div className="admin">
       <nav className="admin-nav" aria-label="Admin pages">
         {PAGES.map(([id, name]) => (
-          <button key={id} type="button" aria-current={page === id ? "page" : undefined} onClick={() => setPage(id)}>
+          <button
+            key={id}
+            type="button"
+            aria-current={page === id ? "page" : undefined}
+            onClick={() => {
+              setOpenRunId(undefined);
+              setPage(id);
+            }}
+          >
             {name}
           </button>
         ))}
       </nav>
       <main className="admin-main">
         {page === "overview" && <OverviewPage />}
-        {page === "requests" && <RequestsPage />}
+        {page === "requests" && <RequestsPage key={openRunId ?? "list"} openRunId={openRunId} />}
         {page === "users" && <UsersPage />}
         {page === "calls" && <ModelCallsPage />}
         {page === "savings" && <SavingsPage />}
+        {page === "quality" && <QualityPage />}
+        {page === "reliability" && (
+          <ReliabilityPage
+            onOpenRun={(runId) => {
+              setOpenRunId(runId);
+              setPage("requests");
+            }}
+          />
+        )}
       </main>
     </div>
   );

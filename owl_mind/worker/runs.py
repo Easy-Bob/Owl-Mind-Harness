@@ -170,6 +170,45 @@ async def handle(
     return step
 
 
+async def worker_status(queue: RedisRunQueue, dead_limit: int = 50) -> dict[str, Any]:
+    """For the Admin Reliability page (M4-F): workers, jobs, the queue and the dead letters.
+
+    A dead letter holds the queued request, which includes the student's message, so only its
+    run ID, attempt count and time are read out of it.
+    """
+    now = time.time()
+    beats = await queue.client.hgetall(HEARTBEATS)
+    workers = sorted(
+        ({"worker": k.decode(), "seconds_ago": round(now - float(v), 1)} for k, v in beats.items()),
+        key=lambda w: w["seconds_ago"],
+    )
+    jobs: dict[str, dict[str, float | None]] = {}
+    for key, value in (await queue.client.hgetall(JOB_STATUS)).items():
+        name, _, outcome = key.decode().rpartition(":")
+        jobs.setdefault(name, {"success": None, "failure": None})[outcome] = float(value)
+    dead = []
+    for entry_id, fields in await queue.client.xrevrange(DEAD, count=dead_limit):
+        try:
+            run_id = json.loads(fields[b"run"].decode())["run_id"]
+        except ValueError, KeyError, TypeError:
+            run_id = None
+        dead.append(
+            {
+                "run_id": run_id,
+                "deliveries": int(fields.get(b"deliveries", b"0")),
+                "at": int(entry_id.decode().split("-")[0]) / 1000,
+            }
+        )
+    lag, pending = await queue.depth()
+    return {
+        "workers": workers,
+        "jobs": [{"job": name, **times} for name, times in sorted(jobs.items())],
+        "dead_letters": dead,
+        "dead_letter_total": await queue.client.xlen(DEAD),
+        "queue": {"lag": lag, "pending": pending},
+    }
+
+
 class JobLease:
     """One holder at a time for a background job, across every worker."""
 

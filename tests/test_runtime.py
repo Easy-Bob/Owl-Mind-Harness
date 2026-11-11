@@ -79,6 +79,12 @@ class FakeAdminStore:
     async def savings(self, days: int) -> dict:
         return {"days": days}
 
+    async def quality(self, days: int) -> dict:
+        return {"days": days, "live": []}
+
+    async def reliability(self, days: int) -> dict:
+        return {"days": days, "trouble": [], "runs_per_day": []}
+
 
 class World:
     """An app with in-memory services, a scripted model and a chosen logged-in student."""
