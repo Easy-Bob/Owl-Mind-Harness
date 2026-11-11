@@ -37,9 +37,11 @@ class Settings(BaseSettings):
     quiz_reuse: bool = True
     # Workers (M4-B, tuned in M4-E): runs at once per worker process, and its /metrics port
     # (0 for none). Each worker on one host needs its own port.
-    worker_concurrency: int = 4
+    # 16 from the load test: 4 capped two workers at about 111 turns a minute (evals/load).
+    worker_concurrency: int = 16
     worker_metrics_port: int = 9101
     # Database connections per process, for each pool (SQLAlchemy, the saver, the store).
+    # 5 held 32 runs at once in the load test with no errors; 12 changed nothing.
     db_pool_size: int = 5
     # The large tier's model. Changed only with the owner's approval of the M3-F comparison.
     large_model: Literal["deepseek-flash", "deepseek-v4-pro"] = "deepseek-flash"
