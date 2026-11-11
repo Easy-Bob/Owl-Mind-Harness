@@ -24,6 +24,7 @@ from owl_mind.api.deps import (
 from owl_mind.core.config import ConfigError, Settings, get_settings
 from owl_mind.core.runtime import Services
 from owl_mind.services.accounts import EmailTaken
+from owl_mind.services.cohort import invite_hash
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,8 @@ MAX_ADDRESS_FAILURES = 20
 NOTICE = (
     "This is a test system. Your messages are sent to DeepSeek, a model provider that stores "
     "data in China, so don't include personal information. The admin can see your activity "
-    "and open your messages."
+    "and open your messages. Chats you haven't used for 180 days are deleted, and you can "
+    "delete your account and everything in it at any time from the chat page."
 )
 
 _hasher = PasswordHasher()
@@ -139,7 +141,9 @@ async def signup(body: SignupIn, request: Request, services: ServicesDep) -> Use
         raise HTTPException(status_code=400, detail="The notice must be accepted")
     password_hash = await asyncio.to_thread(_hasher.hash, body.password)
     try:
-        account = await services.accounts.create(body.email, password_hash)
+        account = await services.accounts.create(
+            body.email, password_hash, invite_hash(body.invite_code)
+        )
     except EmailTaken as exc:
         raise HTTPException(status_code=409, detail="This email already has an account") from exc
     return UserOut(email=account.email, role=role_for(account.email, settings))
@@ -180,6 +184,45 @@ async def login(
 
 @auth_router.post("/logout", status_code=204)
 async def logout(response: Response) -> None:
+    response.delete_cookie(
+        SESSION_COOKIE,
+        httponly=True,
+        secure=get_settings().cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+
+
+class DeleteAccountIn(BaseModel):
+    password: str = Field(max_length=MAX_PASSWORD_CHARS)
+    # Typed by the student, so a stray click can't delete an account.
+    confirm: str = Field(max_length=40)
+
+
+DELETE_CONFIRMATION = "delete my account"
+
+
+@auth_router.post("/account/delete", status_code=204)
+async def delete_account(
+    body: DeleteAccountIn,
+    response: Response,
+    user: Annotated[CurrentUser, Depends(current_user)],
+    services: ServicesDep,
+) -> None:
+    """Remove the student's chats, memory, plans, reviews, quizzes, approvals and local forum
+    copies (M4-G). Posts already on GitHub stay there. Usage stays only as daily counts."""
+    if body.confirm.strip().lower() != DELETE_CONFIRMATION:
+        raise HTTPException(status_code=400, detail=f'Type "{DELETE_CONFIRMATION}" to confirm.')
+    account = await services.accounts.get_by_id(user.id)
+    if account is None or not await _password_matches(account.password_hash, body.password):
+        raise HTTPException(status_code=401, detail="That password isn't right.")
+    if services.retention is None:
+        raise HTTPException(status_code=503, detail="Accounts can't be deleted right now.")
+    if await services.runs.has_busy_run(user.id):
+        raise HTTPException(
+            status_code=409, detail="An answer or a card is still open. Finish it, then try again."
+        )
+    await services.retention.delete_account(user.id)
     response.delete_cookie(
         SESSION_COOKIE,
         httponly=True,

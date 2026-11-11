@@ -35,6 +35,9 @@ WORKER_HEARTBEAT = Gauge("owl_worker_heartbeat_seconds", "When this worker last 
 JOB_RUNS = Counter("owl_job_runs_total", "Background job passes", ["job_name", "outcome"])
 JOB_LAST_SUCCESS = Gauge("owl_job_last_success_seconds", "When a job last succeeded", ["job_name"])
 
+BUDGET_GLOBAL_SHARE = Gauge(
+    "owl_budget_global_share", "Share of today's global budget spent, from the Redis counter"
+)
 BUDGET_STEPS = Counter("owl_budget_steps_total", "Steps of the budget ladder reached", ["step"])
 INTEGRITY = Counter("owl_integrity_total", "Integrity check outcomes", ["result", "layer"])
 

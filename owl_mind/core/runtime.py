@@ -33,6 +33,7 @@ from owl_mind.core.streaming import STREAM_MODES, StreamTranslator
 from owl_mind.forum.handoff import known_values
 from owl_mind.services.accounts import AccountStore, LoginLimiter
 from owl_mind.services.admin_store import AdminStore
+from owl_mind.services.cohort import allowed
 from owl_mind.services.run_store import WAITING, RunStore
 from owl_mind.services.study_store import StudyStore
 from owl_mind.tools.context import RunContext
@@ -65,6 +66,8 @@ class Services:
     memory: Any = None
     # A RedisRunQueue: runs go to workers (M4-B). None runs them in this process, as in tests.
     queue: Any = None
+    # Retention and account deletion (M4-G). None in tests that don't need them.
+    retention: Any = None
 
 
 @dataclass(frozen=True)
@@ -261,6 +264,9 @@ async def _run_agent(
     meter: RunMeter,
 ) -> bool:
     """Run the agent. True if it paused for the student's approval."""
+    cohort = get_settings().agent_cohort.get_secret_value()
+    if cohort and not allowed(await services.accounts.get_by_id(request.student_id), cohort):
+        raise LiveAgentRunsDisabled("not in the cohort with live agent runs")
     limit = RUN_LIMITS[result.task_kind]
     meter.run_tokens = limit.tokens
     agent = build_owl_agent(

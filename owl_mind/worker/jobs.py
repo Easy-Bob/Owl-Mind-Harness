@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 HANDOFF_RETRY_SECONDS = 60
 APPROVAL_CHECK_SECONDS = 300
+RETENTION_SECONDS = 24 * 3600
 RESUME_CHECK_SECONDS = 60
 # Long enough that the API, which makes the resume run straight after the answer, is done.
 RESUME_GRACE = timedelta(minutes=2)
@@ -64,6 +65,8 @@ def jobs(services: Services) -> list[tuple[str, float, Callable[[], Awaitable[ob
         found.append(("approvals", APPROVAL_CHECK_SECONDS, lambda: expire_approvals(services)))
         if services.queue is not None:
             found.append(("resume", RESUME_CHECK_SECONDS, lambda: resume_answered(services)))
+    if services.retention is not None:
+        found.append(("retention", RETENTION_SECONDS, services.retention.run))
     if services.memory is not None:
         found.append(("memory", APPROVAL_CHECK_SECONDS, services.memory.run_due))
     if services.handoffs is not None:

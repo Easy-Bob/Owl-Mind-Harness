@@ -14,6 +14,7 @@ import { ApprovalCard } from "./ApprovalCard";
 import { ForumAccountControl } from "./ForumAccountControl";
 import { HandoffCard } from "./HandoffCard";
 import { HelpPanel } from "./HelpPanel";
+import { AccountPanel } from "./AccountPanel";
 import { MemoryPanel } from "./MemoryPanel";
 
 const UNREAD_CHECK_MS = 60_000;
@@ -260,6 +261,7 @@ export function ChatPage({ user, onLoggedOut }: Props) {
         </ul>
         <ForumAccountControl onFailure={handleFailure} />
         <MemoryPanel onFailure={handleFailure} />
+        <AccountPanel onDeleted={onLoggedOut} />
         <div className="account">
           <span>{user.email}</span>
           <button type="button" onClick={logout}>

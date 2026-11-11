@@ -24,11 +24,15 @@ class Account:
     id: uuid.UUID
     email: str
     password_hash: str | None
+    # The hash of the invite code the account signed up with, for cohorts (M4-G).
+    invite_hash: str | None = None
 
 
 @runtime_checkable
 class AccountStore(Protocol):
-    async def create(self, email: str, password_hash: str) -> Account:
+    async def create(
+        self, email: str, password_hash: str, invite_hash: str | None = None
+    ) -> Account:
         """Raise EmailTaken if the email is in use. Emails are compared in lower case."""
 
     async def get_by_email(self, email: str) -> Account | None: ...
@@ -51,10 +55,10 @@ class InMemoryAccountStore:
     def __init__(self) -> None:
         self.accounts: dict[uuid.UUID, Account] = {}
 
-    async def create(self, email: str, password_hash: str) -> Account:
+    async def create(self, email: str, password_hash: str, invite_hash=None) -> Account:
         if await self.get_by_email(email):
             raise EmailTaken
-        account = Account(uuid.uuid4(), email.lower(), password_hash)
+        account = Account(uuid.uuid4(), email.lower(), password_hash, invite_hash)
         self.accounts[account.id] = account
         return account
 
@@ -70,30 +74,35 @@ class PostgresAccountStore:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
-    async def create(self, email: str, password_hash: str) -> Account:
+    async def create(self, email: str, password_hash: str, invite_hash=None) -> Account:
         row = Student(
             id=uuid.uuid4(),
             email=email.lower(),
             password_hash=password_hash,
             notice_accepted_at=datetime.now(UTC),
+            invite_hash=invite_hash,
         )
         try:
             async with self._sessions.begin() as session:
                 session.add(row)
         except IntegrityError as exc:
             raise EmailTaken from exc
-        return Account(row.id, row.email, row.password_hash)
+        return Account(row.id, row.email, row.password_hash, row.invite_hash)
 
     async def get_by_email(self, email: str) -> Account | None:
         statement = select(Student).where(Student.email == email.lower())
         async with self._sessions() as session:
             row = await session.scalar(statement)
-        return None if row is None else Account(row.id, row.email, row.password_hash)
+        return (
+            None if row is None else Account(row.id, row.email, row.password_hash, row.invite_hash)
+        )
 
     async def get_by_id(self, account_id: uuid.UUID) -> Account | None:
         async with self._sessions() as session:
             row = await session.get(Student, account_id)
-        return None if row is None else Account(row.id, row.email, row.password_hash)
+        return (
+            None if row is None else Account(row.id, row.email, row.password_hash, row.invite_hash)
+        )
 
 
 class InMemoryLoginLimiter:

@@ -367,6 +367,49 @@ describe("App", () => {
     expect(calls.filter((c) => c.key === "DELETE /memory")).toHaveLength(1);
   });
 
+  it("deletes the account only after the password and the typed confirmation", async () => {
+    const calls = fakeServer({
+      ...loggedIn,
+      "POST /auth/account/delete": { status: 204 },
+      "GET /auth/notice": { body: { notice: "n" } },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Delete my account" }));
+    const form = screen.getByRole("form", { name: "Delete my account" });
+    expect(form).toHaveTextContent("Posts already on the forum stay there.");
+    const submit = screen.getByRole("button", { name: "Delete everything" });
+    await user.type(screen.getByLabelText("Password"), "secret-password");
+    expect(submit).toBeDisabled();
+    await user.type(screen.getByLabelText(/Type "delete my account"/), "delete my account");
+    await user.click(submit);
+
+    await waitFor(() =>
+      expect(calls.find((c) => c.key === "POST /auth/account/delete")?.body).toEqual({
+        password: "secret-password",
+        confirm: "delete my account",
+      }),
+    );
+    expect(await screen.findByRole("button", { name: /log in/i })).toBeVisible();
+  });
+
+  it("shows why an account wasn't deleted", async () => {
+    fakeServer({
+      ...loggedIn,
+      "POST /auth/account/delete": { status: 401, body: { detail: "That password isn't right." } },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Delete my account" }));
+    await user.type(screen.getByLabelText("Password"), "wrong");
+    await user.type(screen.getByLabelText(/Type "delete my account"/), "delete my account");
+    await user.click(screen.getByRole("button", { name: "Delete everything" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("That password isn't right.");
+  });
+
   it("shows what can be asked and the course topics in an empty chat", async () => {
     fakeServer({
       ...loggedIn,

@@ -150,6 +150,8 @@ export const api = {
   help: () => request<Help>("/help"),
   memory: () => request<MemoryView>("/memory"),
   deleteMemory: () => request<void>("/memory", undefined, "DELETE"),
+  deleteAccount: (password: string, confirm: string) =>
+    request<void>("/auth/account/delete", { password, confirm }),
   citations: (ids: string[]) =>
     request<Record<string, Citation | null>>(
       `/citations?ids=${encodeURIComponent(ids.join(","))}`,
