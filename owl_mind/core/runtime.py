@@ -24,7 +24,7 @@ from owl_mind.core.events import EventBus
 from owl_mind.core.factory import LiveAgentRunsDisabled, build_owl_agent, goes_direct
 from owl_mind.core.integrity import CHECKED_TUTORS, IntegrityCheck, Verdict, fallback, needs_check
 from owl_mind.core.intent.classifier import IntentResult, IntentStep
-from owl_mind.core.intent.followup import needs_earlier, previous_chat
+from owl_mind.core.intent.followup import earlier_for, might_need_earlier
 from owl_mind.core.intent.taxonomy import Intent, Reply, Route, Subagent, TaskKind
 from owl_mind.core.limits import RUN_LIMITS, RunLimit  # noqa: F401  RunLimit is imported from here.
 from owl_mind.core.model import get_chat_model
@@ -212,10 +212,12 @@ async def _draft_handoff(services: Services, request: RunRequest, emit: _Emitter
 
 
 async def _earlier_for(services: Services, request: RunRequest) -> tuple[str, str] | None:
-    """The previous chat, only for a follow-up message with nothing of its own to go on."""
-    if not needs_earlier(request.message):
+    """The previous chat, only for a follow-up or a short answer to the tutor's question."""
+    if not might_need_earlier(request.message):
         return None
-    return previous_chat(await read_history(services.checkpointer, request.thread_id))
+    return earlier_for(
+        request.message, await read_history(services.checkpointer, request.thread_id)
+    )
 
 
 def _kind(result: IntentResult) -> str | None:
