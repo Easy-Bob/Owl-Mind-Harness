@@ -6,7 +6,17 @@ Each case has an ID that stays fixed, so results can be compared across runs and
 from owl_mind.core.intent.taxonomy import TaskKind
 from owl_mind.evaluation.integrity_set import ATTACKS, VALID
 
+_PLANNER_ASKS = (
+    "I've put together a proposal; nothing is committed yet. Cuckoo hashing study plan: collision "
+    "resolution basics, cuckoo hashing, eviction and cycles, load factor and rehashing. Two "
+    "things it's missing: what you're aiming for (an exam, a course assignment, or just "
+    "understanding it) and the date you need it by. If you tell me either, I'll adjust the "
+    "ordering and pace."
+)
+
 # Follow-ups: (id, earlier student message, earlier tutor reply, follow-up, accepted task kinds).
+# The eval picks the earlier turn with the app's own code, so a case the app would send with no
+# earlier turn is classified with none here too.
 FOLLOW_UPS: list[tuple[str, str, str, str, frozenset[TaskKind]]] = [
     ("f-01", "explain Bloom filters", "A Bloom filter is a bit array with k hash functions...",
      "quiz me on it", frozenset({TaskKind.ASSESS})),
@@ -28,6 +38,15 @@ FOLLOW_UPS: list[tuple[str, str, str, str, frozenset[TaskKind]]] = [
      "give me some practice questions on them", frozenset({TaskKind.ASSESS})),
     ("f-10", "what is MinHash", "MinHash estimates Jaccard similarity...",
      "test me on it", frozenset({TaskKind.ASSESS})),
+    # Short answers to a tutor's question (issue #70).
+    ("f-11", "schedule a study plan on cuckoo hashing", _PLANNER_ASKS,
+     "exam", frozenset({TaskKind.PLAN})),
+    ("f-12", "schedule a study plan on cuckoo hashing", _PLANNER_ASKS,
+     "by next Friday", frozenset({TaskKind.PLAN})),
+    ("f-13", "explain Bloom filters",
+     "A Bloom filter is a bit array with k hash functions. Do you want to go deeper on false "
+     "positives or on choosing k?",
+     "false positives", frozenset({TaskKind.LEARN})),
 ]  # fmt: skip
 
 # Dialogue cases: (id, message, expected task kind, grounded in the notes).

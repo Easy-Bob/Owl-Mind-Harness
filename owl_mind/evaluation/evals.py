@@ -30,6 +30,7 @@ from owl_mind.core.budget import InMemoryBudgetLedger
 from owl_mind.core.config import get_settings
 from owl_mind.core.factory import goes_direct
 from owl_mind.core.intent.classifier import IntentStep
+from owl_mind.core.intent.followup import earlier_for
 from owl_mind.core.intent.taxonomy import Route, Subagent, TaskKind
 from owl_mind.core.model import get_chat_model
 from owl_mind.core.prompts import PROMPT_VERSION
@@ -105,7 +106,11 @@ async def intent(runs: int) -> dict[str, Any]:
     follow_right = 0
     for _ in range(runs):
         for _case_id, student, tutor, message, accepted in FOLLOW_UPS:
-            result = await one(message, earlier=(student, tutor))
+            history = [
+                {"role": "user", "content": student},
+                {"role": "assistant", "content": tutor},
+            ]
+            result = await one(message, earlier=earlier_for(message, history))
             follow_right += result.route is Route.ORCHESTRATED and result.task_kind in accepted
     return {
         "cases": len(INTENT),
